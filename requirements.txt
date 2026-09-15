@@ -1,0 +1,2 @@
+# Python project dependencies
+# Add packages here as needed

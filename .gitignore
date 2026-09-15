@@ -1,0 +1,58 @@
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# Node
+node_modules/
+.npm/
+.next/
+out/
+dist/
+build/
+
+# Java
+*.class
+*.jar
+*.war
+*.ear
+
+# C#
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+*.cache
+
+# Environment files
+.env
+.env.*
+
+# Coverage and test output
+coverage/
+htmlcov/
+.pytest_cache/
+
+# Misc
+*.bak
+*.orig

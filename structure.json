@@ -1,0 +1,151 @@
+{
+        "name": "Takeout",
+        "children": [
+        {
+            "name": "Fitbit",
+            "children": [
+    {
+        "name": "Account Changes",
+        "files": ["Account_Management_Events_*.csv"]
+    },
+    {
+        "name": "Active Zone Minutes (AZM)",
+        "files": ["*.csv"]
+    },
+    {
+        "name": "Activity Goals",
+        "files": ["*.csv", "*.txt"]
+    },
+    {
+        "name": "Atrial Fibrillation PPG",
+        "files": ["*.csv", "*.json", "*.txt"]
+    },
+    {
+        "name": "Biometrics",
+        "files": ["Glucose YYYYMM.csv"]
+    },
+    {
+        "name": "Daily Readiness",
+        "files": ["Daily Readiness User Properties - YYYY-MM-DD.csv", "README.txt"]
+    },
+    {
+        "name": "Discover",
+        "files": ["*.csv", "*.json", "*.txt"]
+    },
+    {
+        "name": "Fitbit Premium",
+        "files": ["*.csv", "*.json", "*.txt"]
+    },
+    {
+        "name": "Global Export Data",
+        "files": [
+        "badge.json",
+        "calories-YYYY-MM-DD.json",
+        "demographic_vo2_max-YYYY-MM-DD.json",
+        "distance-YYYY-MM-DD.json",
+        "estimated_oxygen_variation-YYYY-MM-DD.csv",
+        "exercise-0.json",
+        "heart_rate-YYYY-MM-DD.json",
+        "height-YYYY-MM-DD.json",
+        "lightly_active_minutes-YYYY-MM-DD.json",
+        "moderately_active_minutes-YYYY-MM-DD.json",
+        "resting_heart_rate-YYYY-MM-DD.json",
+        "sedentary_minutes-YYYY-MM-DD.json",
+        "sleep-YYYY-MM-DD.json",
+        "steps-YYYY-MM-DD.json",
+        "swim_lengths_data-YYYY-MM-DD.json",
+        "time_in_heart_rate_zones-YYYY-MM-DD.json",
+        "very_active_minutes-YYYY-MM-DD.json",
+        "weight-YYYY-MM-DD.json"
+        ]
+    },
+    {
+        "name": "Guided Programs",
+        "files": ["*.csv", "*.json", "*.txt"]
+    },
+    {
+        "name": "Health Fitness Data_GoogleData",
+        "files": ["*.csv", "*.json", "*.txt"]
+    },
+    {
+        "name": "Heart Rate",
+        "files": [
+        "Heart Rate Notifications Alerts.csv",
+        "Heart Rate Notifications Profile.csv",
+        "Heart Rate Notifications README.txt"
+        ]
+    },
+    {
+        "name": "Heart Rate Variability",
+        "files": [
+        "Daily Heart Rate Variability Summary - YYYY-MM-DD.csv",
+        "Daily Respiratory Rate Summary - YYYY-MM-DD.csv",
+        "Heart Rate Variability Details - YYYY-MM-DD.csv",
+        "Heart Rate Variability Histogram - YYYY-MM-DD.csv",
+        "README.txt"
+        ]
+    },
+    {
+        "name": "InAppNotifications_GoogleData",
+        "files": ["*.csv", "*.json", "*.txt"]
+    },
+    {
+        "name": "Menstrual Health",
+        "files": ["*.csv", "*.json", "*.txt"]
+    },
+    {
+        "name": "Oxygen Saturation (SpO2)",
+        "files": ["*.csv", "*.json", "*.txt"]
+    },
+    {
+        "name": "Paired Devices",
+        "files": ["*.csv", "*.json", "*.txt"]
+    },
+    {
+        "name": "Physical Activity_GoogleData",
+        "files": ["*.csv", "*.json", "*.txt"]
+    },
+    {
+        "name": "Sleep Score",
+        "files": ["sleep_score.csv"]
+    },
+    {
+        "name": "Snore and Noise Detect",
+        "files": ["*.csv", "*.json", "*.txt"]
+    },
+    {
+        "name": "Social",
+        "files": ["*.csv", "*.json", "*.txt"]
+    },
+    {
+        "name": "Stress Journal",
+        "files": ["*.csv", "*.json", "*.txt"]
+    },
+    {
+        "name": "Stress Score",
+        "files": ["Stress Score.csv", "Stress Score Readme.txt"]
+    },
+    {
+        "name": "Temperature",
+        "files": [
+        "Computed Temperature - YYYY-MM-DD.csv",
+        "Device Temperature - YYYY-MM-DD.csv"
+        ]
+    },
+    {
+        "name": "Transactions",
+        "files": ["*.csv", "*.json", "*.txt"]
+    },
+    {
+        "name": "User Security Data",
+        "files": ["User_Email_Audit_Entry.csv", "User_Retired_Password.csv"]
+    },
+    {
+        "name": "Your Profile",
+        "files": ["*.csv", "*.json", "*.txt"]
+    }
+            ]
+        }
+        ]
+    }
+
