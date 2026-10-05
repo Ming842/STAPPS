@@ -5,10 +5,6 @@
             "name": "Fitbit",
             "children": [
     {
-        "name": "Account Changes",
-        "files": ["Account_Management_Events_*.csv"]
-    },
-    {
         "name": "Active Zone Minutes (AZM)",
         "files": ["*.csv"]
     },
@@ -18,22 +14,6 @@
     },
     {
         "name": "Atrial Fibrillation PPG",
-        "files": ["*.csv", "*.json", "*.txt"]
-    },
-    {
-        "name": "Biometrics",
-        "files": ["Glucose YYYYMM.csv"]
-    },
-    {
-        "name": "Daily Readiness",
-        "files": ["Daily Readiness User Properties - YYYY-MM-DD.csv", "README.txt"]
-    },
-    {
-        "name": "Discover",
-        "files": ["*.csv", "*.json", "*.txt"]
-    },
-    {
-        "name": "Fitbit Premium",
         "files": ["*.csv", "*.json", "*.txt"]
     },
     {
@@ -60,14 +40,6 @@
         ]
     },
     {
-        "name": "Guided Programs",
-        "files": ["*.csv", "*.json", "*.txt"]
-    },
-    {
-        "name": "Health Fitness Data_GoogleData",
-        "files": ["*.csv", "*.json", "*.txt"]
-    },
-    {
         "name": "Heart Rate",
         "files": [
         "Heart Rate Notifications Alerts.csv",
@@ -86,40 +58,12 @@
         ]
     },
     {
-        "name": "InAppNotifications_GoogleData",
-        "files": ["*.csv", "*.json", "*.txt"]
-    },
-    {
-        "name": "Menstrual Health",
-        "files": ["*.csv", "*.json", "*.txt"]
-    },
-    {
         "name": "Oxygen Saturation (SpO2)",
-        "files": ["*.csv", "*.json", "*.txt"]
-    },
-    {
-        "name": "Paired Devices",
-        "files": ["*.csv", "*.json", "*.txt"]
-    },
-    {
-        "name": "Physical Activity_GoogleData",
         "files": ["*.csv", "*.json", "*.txt"]
     },
     {
         "name": "Sleep Score",
         "files": ["sleep_score.csv"]
-    },
-    {
-        "name": "Snore and Noise Detect",
-        "files": ["*.csv", "*.json", "*.txt"]
-    },
-    {
-        "name": "Social",
-        "files": ["*.csv", "*.json", "*.txt"]
-    },
-    {
-        "name": "Stress Journal",
-        "files": ["*.csv", "*.json", "*.txt"]
     },
     {
         "name": "Stress Score",
@@ -131,14 +75,6 @@
         "Computed Temperature - YYYY-MM-DD.csv",
         "Device Temperature - YYYY-MM-DD.csv"
         ]
-    },
-    {
-        "name": "Transactions",
-        "files": ["*.csv", "*.json", "*.txt"]
-    },
-    {
-        "name": "User Security Data",
-        "files": ["User_Email_Audit_Entry.csv", "User_Retired_Password.csv"]
     },
     {
         "name": "Your Profile",

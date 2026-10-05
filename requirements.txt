@@ -1,2 +1,5 @@
 # Python project dependencies
 # Add packages here as needed
+matplotlib==3.11.2
+pylint
+pandas
