@@ -53,7 +53,7 @@ class Preprocessor:
         heart_rate_data.sort_values(by=["participant_id", "dateTime"], inplace=True)
 
         return heart_rate_data
-    
+
     def process_heart_rate_variability(self) -> pd.DataFrame:
         """Process HRV data as long as it is available."""
         hrv_data = self._process_data("Heart Rate Variability Summary")
@@ -66,7 +66,7 @@ class Preprocessor:
         #sort data by participant_id and then by dateTime
         hrv_data.sort_values(by=["participant_id", "dateTime"], inplace=True)
         hrv_data.reset_index(drop=True, inplace=True)
-        
+
         return hrv_data
 
     def process_sleep_score(self) -> pd.DataFrame:
