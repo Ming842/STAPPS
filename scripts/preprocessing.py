@@ -2,9 +2,8 @@
 import pandas as pd
 
 from config import DATA_DIR
-from participant_loader import ParticipantDataLoader
+from scripts.loaders import ParticipantDataLoader
 from structure_loader import StructureDataLoader
-
 
 class Preprocessor:
     """Class to handle preprocessing of data files."""

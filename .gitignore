@@ -56,3 +56,5 @@ htmlcov/
 # Misc
 *.bak
 *.orig
+
+password.txt
