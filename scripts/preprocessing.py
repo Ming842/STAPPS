@@ -2,7 +2,7 @@
 import pandas as pd
 
 from config import DATA_DIR
-from scripts.loaders import ParticipantDataLoader
+from loaders import ParticipantDataLoader
 from structure_loader import StructureDataLoader
 
 class Preprocessor:
@@ -13,7 +13,7 @@ class Preprocessor:
         self.loader = StructureDataLoader()
         self.participant_loader = ParticipantDataLoader()
 
-    def _process_data(self, data_type: str) -> pd.DataFrame:
+    def _process_data(self, data_type: str, part_id: int = None) -> pd.DataFrame:
         """Load data for all participants and return it in long format."""
         frames = []
 

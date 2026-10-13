@@ -1,9 +1,6 @@
-"""Module for loading participant data from the Fitbit export."""
-
-# import Any
-
+"""Module for loading participant data from the Fitbit export and Cycle event Excel."""
 import re
-import os 
+import os
 import msoffcrypto
 
 import pandas as pd
@@ -11,14 +8,14 @@ from typing import Any
 from pathlib import Path
 
 from config import DATA_DIR, PASSWORD
-from parsers import parse_csv, parse_json, parse_txt
+from parsers import parse_csv, parse_json
 from structure_loader import StructureDataLoader
 
-
 class ParticipantDataLoader():
-    """Class to load and manage participant data from the Fitbit export."""
-    def __init__(self, data_dir: str | Path = DATA_DIR) -> None:
+    """Class to load and manage participant data from the Fitbit export and Cycle data."""
+    def __init__(self, data_dir: str | Path = DATA_DIR, password: str = PASSWORD) -> None:
         self.data_dir = Path(data_dir)
+        self.password = Path(password)
         self.pat_ids, self.pat_dirs = self._get_pt_ids_and_dirs(self.data_dir)
 
     def _get_pt_ids_and_dirs(self, path: Path) -> tuple[list[int], list[Path]]:
@@ -49,20 +46,18 @@ class ParticipantDataLoader():
                     df[col]
                     .astype("string")
                     .str.extract(r"(\d+)\s*keer", flags=re.IGNORECASE)[0]
-                    .astype("Float64")   # keeps NaN as missing
+                    .pipe(pd.to_numeric, errors="coerce")
+                    .astype(object)
+                    .fillna(False)
                 )
 
             # --- Boolean columns: any non-empty text -> True ---
             for col in bool_cols:
+                values = df[col].astype("string").str.strip()
                 df[col] = (
-                    df[col]
-                    .astype("string")
-                    .str.strip()
-                    .fillna("")
-                    .ne("")
-                    & df[col].astype("string").str.strip().ne("None.")
-                    .fillna(False)
-                    .astype(bool)
+                    values.notna()
+                    & values.ne("")
+                    & values.ne("None.")
                 )
         else:
             # If symptoms is False, set count columns to 0 and boolean columns to False
@@ -136,7 +131,7 @@ class ParticipantDataLoader():
         # Read password, strip newline/whitespace
         excel_path = Path(os.path.join(self.data_dir, "treatment_data.xlsx"))
         decrypted_path = Path(os.path.join(self.data_dir, "treatment_data_decrypted.xlsx"))
-        password_path = Path(PASSWORD)
+        password_path = Path(self.password)
 
         password = password_path.read_text(encoding="utf-8").strip()
 
@@ -170,11 +165,22 @@ class ParticipantDataLoader():
             baseline_rows = group[group["Period"] == "Baseline"]
             if baseline_rows["Bijwerking"].eq("wel").any():
                 cycles = self._format_cycles(group, True)
+                cycles["Bijwerking"] = True
             else:
                 cycles = self._format_cycles(group, False)
+                cycles["Bijwerking"] = False
             data = pd.concat([data, cycles], ignore_index=True)
-        return data
 
+        # set PatientID to integer
+        data["participant_id"] = data["PatientID"].str.extract(r"(\d+)").astype(int)
+
+        # move participant_id to the first column
+        cols = data.columns.tolist()
+        cols.insert(0, cols.pop(cols.index("participant_id")))
+        data = data[cols]
+        
+        data.drop(columns=["PatientID"], inplace=True)
+        return data
 
 if __name__ == "__main__":
     loader = StructureDataLoader()
