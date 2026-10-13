@@ -38,6 +38,7 @@ class ParticipantDataLoader():
         # Placeholder for actual implementation
         count_cols = ["ED_Visits", "Hospitalizations", "Contact_HCP"]
         bool_cols = ["Dose_Modifications", "Chemo Postponed"]
+        date_cols = ["ed_visits_date", "hospitalizations_date", "contact_hcp_date"]
         df = cycles_data.copy()
         if symptoms:
             # --- Count columns: "1 keer" -> 1, "2 keer" -> 2 ---
@@ -59,11 +60,25 @@ class ParticipantDataLoader():
                     & values.ne("")
                     & values.ne("None.")
                 )
+            for col in date_cols:
+                date_pat = r"\d{1,2}-\d{1,2}-\d{4}"
+
+                pattern = rf"({date_pat})\s*(?:tm|t\s*/\s*m)\s*({date_pat})|({date_pat})"
+
+                result = []
+
+                for m in re.finditer(pattern, col, flags=re.IGNORECASE):
+                    if m.group(1):  # date range
+                        start = pd.to_datetime(m.group(1), dayfirst=True, errors="coerce")
+                        end = pd.to_datetime(m.group(2), dayfirst=True, errors="coerce")
+                        result.append([start, end])
+                    else:  # single date
+                        result.append(pd.to_datetime(m.group(3), dayfirst=True, errors="coerce"))
+                    df[col] = result
+
         else:
             # If symptoms is False, set count columns to 0 and boolean columns to False
-            for col in count_cols:
-                df[col] = False
-            for col in bool_cols:
+            for col in [count_cols, bool_cols, date_cols]:
                 df[col] = False
         return df
 

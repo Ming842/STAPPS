@@ -1,5 +1,8 @@
 # Python project dependencies
 # Add packages here as needed
 matplotlib==3.11.2
-pylint
-pandas
+msoffcrypto-tool==6.0.0
+openpyxl==3.1.5
+pandas==3.0.6
+pylint==4.1.3
+

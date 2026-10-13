@@ -14,11 +14,18 @@ class Preprocessor:
         self.participant_loader = ParticipantDataLoader()
 
     def _process_data(self, data_type: str, part_id: int = None) -> pd.DataFrame:
-        """Load data for all participants and return it in long format."""
+        """Load data for all participants and return it in long format.
+        If part_id is provided, only load data for that participant.
+        Args:
+            data_type (str): The type of data to process (e.g., "steps", "heart_rate").
+            part_id (int, optional): The participant ID to filter the data. Defaults to None.
+        Returns:
+            pd.DataFrame: A DataFrame containing the processed data.
+        """
         frames = []
 
         for parent_path, files in self.loader.find_paths(data_type):
-            for part_id in self.participant_loader.pat_ids:
+            for part_id in ([part_id] if part_id is not None else self.participant_loader.pat_ids):
                 paths = self.participant_loader.make_file_paths(
                     part_id,
                     parent_path,
@@ -46,16 +53,16 @@ class Preprocessor:
 
         return pd.concat(frames, ignore_index=True)
 
-    def process_heart_rate(self) -> pd.DataFrame: 
+    def process_heart_rate(self, part_id: int = None) -> pd.DataFrame: 
         """Process heart rate data as long as it is available."""
-        heart_rate_data = self._process_data("heart_rate")
+        heart_rate_data = self._process_data("heart_rate", part_id)
         heart_rate_data.sort_values(by=["participant_id", "dateTime"], inplace=True)
 
         return heart_rate_data
 
-    def process_heart_rate_variability(self) -> pd.DataFrame:
+    def process_heart_rate_variability(self, part_id: int = None) -> pd.DataFrame:
         """Process HRV data as long as it is available."""
-        hrv_data = self._process_data("Heart Rate Variability Summary")
+        hrv_data = self._process_data("Heart Rate Variability Summary", part_id)
         hrv_data.insert(1, "dateTime", pd.to_datetime(
                             hrv_data["timestamp"],
                             format="ISO8601"
@@ -68,13 +75,13 @@ class Preprocessor:
 
         return hrv_data
 
-    def process_sleep_score(self) -> pd.DataFrame:
+    def process_sleep_score(self, part_id: int = None) -> pd.DataFrame:
         """Process Sleep Score data as long as it is available."""
-        return self._process_data("sleep_score")
+        return self._process_data("sleep_score", part_id)
 
-    def process_step_count(self) -> pd.DataFrame:
+    def process_step_count(self, part_id: int = None) -> pd.DataFrame:
         """Process Step Count data as long as it is available."""
-        return self._process_data("steps")
+        return self._process_data("steps", part_id)
 
 if __name__ == "__main__":
     preprocessor = Preprocessor()

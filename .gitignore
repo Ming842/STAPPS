@@ -23,6 +23,12 @@ __pycache__/
 venv/
 env/
 
+# Data
+Data/
+.Data/
+data/
+.data/
+
 # Node
 node_modules/
 .npm/
