@@ -25,9 +25,9 @@ class Preprocessor:
         frames = []
 
         for parent_path, files in self.loader.find_paths(data_type):
-            for part_id in ([part_id] if part_id is not None else self.participant_loader.pat_ids):
+            for id in (part_id if part_id is not None else self.participant_loader.pat_ids):
                 paths = self.participant_loader.make_file_paths(
-                    part_id,
+                    id,
                     parent_path,
                     files,
                 )
@@ -41,11 +41,23 @@ class Preprocessor:
                         )
                         # Convert value from text to numbers
                         frame["value"] = pd.to_numeric(frame["value"], errors="coerce")
-                        frame.insert(0, "participant_id", part_id)
+                        frame.insert(0, "participant_id", id)
+                        frames.append(frame)
+
+                elif data_type == "Heart Rate Variability Summary":
+                    for records in loaded_data:
+                        frame = pd.DataFrame(records, columns=["timestamp", "rmssd"])
+                        frame["dateTime"] = pd.to_datetime(
+                            frame["dateTime"],
+                            format="ISO8601"
+                        )
+                        # Convert rmssd from text to numbers
+                        frame["rmssd"] = pd.to_numeric(frame["rmssd"], errors="coerce")
+                        frame.insert(0, "participant_id", id)
                         frames.append(frame)
                 else:
                     participant_data = pd.DataFrame(loaded_data)
-                    participant_data.insert(0, "participant_id", part_id)
+                    participant_data.insert(0, "participant_id", id)
                     frames.append(participant_data)
 
         if not frames:
@@ -81,7 +93,42 @@ class Preprocessor:
 
     def process_step_count(self, part_id: int = None) -> pd.DataFrame:
         """Process Step Count data as long as it is available."""
-        return self._process_data("steps", part_id)
+        step_data = self._process_data("steps", part_id)
+
+        # day column for grouping
+        step_data['date'] = pd.to_datetime(step_data['dateTime']).dt.date
+        
+        for idx, stepdata in step_data.groupby("participant_id"):
+            stepdata = stepdata.sort_values("dateTime")
+
+            # Daily totals
+            daily_totals = (
+                stepdata.groupby("date")["value"]
+                .sum()
+                .sort_index()
+            )
+
+            # 1- to 7-day moving averages of daily totals
+            daily_ma = {
+                window: daily_totals.rolling(window=window, min_periods=1).mean()
+                for window in range(2, 8)
+            }
+
+            for date, day_data in stepdata.groupby("date"):
+                mask = (
+                    (step_data["participant_id"] == idx) &
+                    (step_data["date"] == date)
+                )
+
+                # Total steps of the day (repeated for each row of that day)
+                step_data.loc[mask, "daily_steps"] = daily_totals.loc[date]
+                # 1- to 7-day moving averages (repeated for each row of that day)
+                for window, ma in daily_ma.items():
+                    step_data.loc[mask, f"daily_steps_ma{window}"] = ma.loc[date]
+
+                # Cumulative steps within the day
+                step_data.loc[mask, "cumsum"] = day_data["value"].cumsum().values
+        return step_data
 
 if __name__ == "__main__":
     preprocessor = Preprocessor()

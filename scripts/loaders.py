@@ -8,7 +8,7 @@ from typing import Any
 from pathlib import Path
 
 from config import DATA_DIR, PASSWORD
-from parsers import parse_csv, parse_json
+from parsers import parse_csv, parse_json, parse_dates
 from structure_loader import StructureDataLoader
 
 class ParticipantDataLoader():
@@ -32,7 +32,7 @@ class ParticipantDataLoader():
                 pt_ids.append(int(m.group(1)))
                 pt_dirs.append(item)
         return pt_ids, pt_dirs
-
+    
     def _format_cycles(self, cycles_data: pd.DataFrame, symptoms: bool) -> pd.DataFrame:
         """Format the cycles data."""
         # Placeholder for actual implementation
@@ -60,26 +60,17 @@ class ParticipantDataLoader():
                     & values.ne("")
                     & values.ne("None.")
                 )
+
+            # --- Date columns: parse dates DD-MM-YYYY or DD-MM-YYYY tm DD-MM-YYYY -> pd.Timestamp ---
             for col in date_cols:
-                date_pat = r"\d{1,2}-\d{1,2}-\d{4}"
-
-                pattern = rf"({date_pat})\s*(?:tm|t\s*/\s*m)\s*({date_pat})|({date_pat})"
-
-                result = []
-
-                for m in re.finditer(pattern, col, flags=re.IGNORECASE):
-                    if m.group(1):  # date range
-                        start = pd.to_datetime(m.group(1), dayfirst=True, errors="coerce")
-                        end = pd.to_datetime(m.group(2), dayfirst=True, errors="coerce")
-                        result.append([start, end])
-                    else:  # single date
-                        result.append(pd.to_datetime(m.group(3), dayfirst=True, errors="coerce"))
-                    df[col] = result
+                df[col] = df[col].apply(parse_dates)
 
         else:
             # If symptoms is False, set count columns to 0 and boolean columns to False
-            for col in [count_cols, bool_cols, date_cols]:
+            for col in [count_cols, bool_cols]:
                 df[col] = False
+            for col in date_cols:
+                df[col] = None
         return df
 
 
@@ -140,7 +131,7 @@ class ParticipantDataLoader():
                 raise ValueError(f"Unsupported file type: {file_path.suffix}")
         return loaded_data
 
-    def cycle_data(self) -> dict[str, Any]:
+    def cycle_data(self, part_id = None) -> dict[str, Any]:
         """Load cycles data."""
 
         # Read password, strip newline/whitespace
@@ -162,6 +153,13 @@ class ParticipantDataLoader():
         decrypted_path.unlink()
         events = sheets["Cycle_Events"]
 
+        # set PatientID to integer
+        events.insert(0, "participant_id", events["PatientID"].str.extract(r"(\d+)").astype(int))
+        events.drop(columns=["PatientID"], inplace=True)
+
+        if part_id is not None:
+            events = events[events["participant_id"].isin(part_id)]
+        
         #set admission time at 9:00 AM
         daily_mask = events["Date"].eq("Dagelijks")
         events.loc[~daily_mask, "Date"] = pd.to_datetime(
@@ -171,12 +169,13 @@ class ParticipantDataLoader():
         datetime_mask = pd.to_datetime(
             chemo_admmission["Date"], errors="coerce"
         ).notna()
+        
         chemo_admmission.loc[datetime_mask, "Date"] += pd.Timedelta(hours=9)
 
         # change all entries with date to datetime, and keep the rest as is
         events.loc[:, "Date"] = chemo_admmission["Date"]
         data = pd.DataFrame()
-        for _, group in events.groupby("PatientID"):
+        for _, group in events.groupby("participant_id"):
             baseline_rows = group[group["Period"] == "Baseline"]
             if baseline_rows["Bijwerking"].eq("wel").any():
                 cycles = self._format_cycles(group, True)
@@ -186,15 +185,7 @@ class ParticipantDataLoader():
                 cycles["Bijwerking"] = False
             data = pd.concat([data, cycles], ignore_index=True)
 
-        # set PatientID to integer
-        data["participant_id"] = data["PatientID"].str.extract(r"(\d+)").astype(int)
 
-        # move participant_id to the first column
-        cols = data.columns.tolist()
-        cols.insert(0, cols.pop(cols.index("participant_id")))
-        data = data[cols]
-        
-        data.drop(columns=["PatientID"], inplace=True)
         return data
 
 if __name__ == "__main__":
