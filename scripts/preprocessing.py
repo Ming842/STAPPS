@@ -46,13 +46,41 @@ class Preprocessor:
 
                 elif data_type == "Heart Rate Variability Summary":
                     for records in loaded_data:
-                        frame = pd.DataFrame(records, columns=["timestamp", "rmssd"])
-                        frame["dateTime"] = pd.to_datetime(
-                            frame["dateTime"],
+                        records["dateTime"] = pd.to_datetime(
+                            records["timestamp"],
                             format="ISO8601"
                         )
+                        records.pop("timestamp")
+                        frame = pd.DataFrame({
+                            "dateTime": [records["dateTime"]],
+                            "rmssd": [records["rmssd"]],
+                        })
+
                         # Convert rmssd from text to numbers
                         frame["rmssd"] = pd.to_numeric(frame["rmssd"], errors="coerce")
+                        frame[frame["rmssd"] == 0] = pd.NA
+
+                        frame.insert(0, "participant_id", id)
+                        frames.append(frame)
+                elif data_type == "resting_heart_rate":
+                    for records in loaded_data:
+                        records = pd.DataFrame(records)
+                        records["dateTime"] = pd.to_datetime(
+                            records["value"].str["date"],
+                            format="%m/%d/%y",
+                            errors="coerce"
+                        )
+                        frame = pd.DataFrame({
+                            "dateTime": records["dateTime"],
+                            "value": records["value"].str["value"],
+                            "error": records["value"].str["error"],
+                        })
+
+                        for col in ["value", "error"]:
+                            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+
+                        frame = frame[frame["value"] != 0]                     
+                        
                         frame.insert(0, "participant_id", id)
                         frames.append(frame)
                 else:
@@ -75,11 +103,6 @@ class Preprocessor:
     def process_heart_rate_variability(self, part_id: int = None) -> pd.DataFrame:
         """Process HRV data as long as it is available."""
         hrv_data = self._process_data("Heart Rate Variability Summary", part_id)
-        hrv_data.insert(1, "dateTime", pd.to_datetime(
-                            hrv_data["timestamp"],
-                            format="ISO8601"
-                        ))
-        hrv_data.pop("timestamp")
 
         #sort data by participant_id and then by dateTime
         hrv_data.sort_values(by=["participant_id", "dateTime"], inplace=True)
@@ -87,47 +110,109 @@ class Preprocessor:
 
         return hrv_data
 
+    def process_resting_heart_rate(self, part_id: int = None) -> pd.DataFrame:
+        """Process resting heart rate data as long as it is available."""
+        return self._process_data("resting_heart_rate", part_id)
+    
     def process_sleep_score(self, part_id: int = None) -> pd.DataFrame:
         """Process Sleep Score data as long as it is available."""
         return self._process_data("sleep_score", part_id)
 
     def process_step_count(self, part_id: int = None) -> pd.DataFrame:
         """Process Step Count data as long as it is available."""
+
         step_data = self._process_data("steps", part_id)
 
-        # day column for grouping
-        step_data['date'] = pd.to_datetime(step_data['dateTime']).dt.date
-        
-        for idx, stepdata in step_data.groupby("participant_id"):
-            stepdata = stepdata.sort_values("dateTime")
+        step_data["dateTime"] = pd.to_datetime(step_data["dateTime"])
+        step_data["date"] = pd.to_datetime(step_data["dateTime"]).dt.normalize()
+
+        for participant_id, participant_data in step_data.groupby("participant_id"):
+
+            participant_data = participant_data.sort_values("dateTime")
 
             # Daily totals
             daily_totals = (
-                stepdata.groupby("date")["value"]
+                participant_data.groupby("date")["value"]
                 .sum()
                 .sort_index()
             )
 
-            # 1- to 7-day moving averages of daily totals
+            # Determine validity of each day
+            valid_series = participant_data.groupby("date").apply(
+                lambda x: (
+                    len(x[x["dateTime"].dt.hour >= 7]) / len(x)
+                ) >= 0.8
+            )
+
+            # Daily moving averages
             daily_ma = {
-                window: daily_totals.rolling(window=window, min_periods=1).mean()
+                window: daily_totals.rolling(
+                    window=window,
+                    min_periods=1
+                ).mean()
                 for window in range(2, 8)
             }
 
-            for date, day_data in stepdata.groupby("date"):
-                mask = (
-                    (step_data["participant_id"] == idx) &
-                    (step_data["date"] == date)
+            # Filtered moving averages
+            daily_ma_filtered = {}
+
+            for window, ma in daily_ma.items():
+
+                invalid_days = (
+                    (~valid_series)
+                    .rolling(window=window, min_periods=1)
+                    .sum()
                 )
 
-                # Total steps of the day (repeated for each row of that day)
-                step_data.loc[mask, "daily_steps"] = daily_totals.loc[date]
-                # 1- to 7-day moving averages (repeated for each row of that day)
-                for window, ma in daily_ma.items():
-                    step_data.loc[mask, f"daily_steps_ma{window}"] = ma.loc[date]
+                daily_ma_filtered[window] = ma.where(invalid_days <= 1)
 
-                # Cumulative steps within the day
-                step_data.loc[mask, "cumsum"] = day_data["value"].cumsum().values
+            # Write daily values back to step_data
+            for date, day_data in participant_data.groupby("date"):
+
+                mask = (
+                    (step_data["participant_id"] == participant_id)
+                    & (step_data["date"] == date)
+                )
+
+                # Daily total
+                step_data.loc[mask, "daily_steps"] = daily_totals.loc[date]
+
+                # Moving averages
+                for window in range(2, 8):
+
+                    step_data.loc[
+                        mask,
+                        f"daily_steps_ma{window}_raw"
+                    ] = daily_ma[window].loc[date]
+
+                    step_data.loc[
+                        mask,
+                        f"daily_steps_ma{window}"
+                    ] = daily_ma_filtered[window].loc[date]
+
+                # Daily cumulative sum
+                step_data.loc[
+                    mask,
+                    "cumsum"
+                ] = day_data["value"].cumsum().values
+
+            # Keep original date
+            participant_mask = (
+                step_data["participant_id"] == participant_id
+            )
+
+            step_data.loc[participant_mask, "date_raw"] = (
+                step_data.loc[participant_mask, "date"]
+            )
+
+            # Remove invalid dates
+            valid_dates = valid_series[valid_series].index
+
+            step_data.loc[
+                participant_mask & ~step_data["date"].isin(valid_dates),
+                "date"
+            ] = pd.NaT
+
         return step_data
 
 if __name__ == "__main__":
