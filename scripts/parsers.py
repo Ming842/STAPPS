@@ -25,6 +25,10 @@ def parse_txt(file_path: Path) -> str:
     with file_path.open("r", encoding="utf-8-sig") as f:
         return f.read()
 
+def normalize_part_ids(part_ids):
+    if isinstance(part_ids, (int, str)):
+        return [part_ids]
+    return list(part_ids)
 
 def parse_dates(text):
     """Parse dates from a given text and return them as a list of datetime objects."""
@@ -52,3 +56,19 @@ def parse_dates(text):
     if not result:
         return None
     return result
+
+def align_metric_against_ref(metric_df, value_date, value_col, ref_df, ref_date, ref_col):
+        aligned_df = (
+            metric_df[[value_date, value_col]]
+            .assign(dateTime=lambda df: pd.to_datetime(df[value_date]))
+            .merge(
+                ref_df[[ref_date, ref_col]]
+                .assign(dateTime=lambda df: pd.to_datetime(df[ref_date]))[["dateTime", ref_col]]
+                .dropna()
+                .drop_duplicates(subset="dateTime"),
+                on="dateTime",
+                how="inner",
+            )
+            .sort_values("dateTime")
+        )
+        return aligned_df

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from config import DATA_DIR, DATA_STRUCTURE
+import re
 class StructureDataLoader:
     """Class to load and manage the structure.json file for Fitbit data."""
 
@@ -26,12 +27,15 @@ class StructureDataLoader:
 
     def find_paths(self, file_name: str) -> list[tuple[Path, list[str]]]:
         """Find all paths of names to a target node name in structure.json."""
+
+        pattern = re.compile(file_name)
+
         def _search_structure(
                 structure: dict[str, Any],
-                target_name: str,
+                target_pattern: re.Pattern[str],
                 ancestors: list[str] | None = None,
         ) -> list[tuple[list[str], list[str]]]:
-            """Recursively search and return all matching full paths for target_name."""
+            """Recursively search and return all matching full paths for target_pattern."""
 
             if ancestors is None:
                 ancestors = []
@@ -41,22 +45,26 @@ class StructureDataLoader:
             current_name = structure.get("name")
             current_path = ancestors + ([current_name] if current_name else [])
 
-            if current_name == target_name:
+            if current_name and target_pattern.search(current_name):
                 matches.append((current_path, structure.get("files", [])))
             else:
                 for f in structure.get("files", []):
-                    if target_name in f:
+                    if target_pattern.search(f):
                         matches.append((current_path, [f]))
 
             for child in structure.get("children", []):
-                child_matches = _search_structure(child, target_name, current_path)
+                child_matches = _search_structure(child, target_pattern, current_path)
                 if child_matches:
                     matches.extend(child_matches)
 
             return matches
 
-        matches = _search_structure(self.structure, file_name)
+        matches = _search_structure(self.structure, pattern)
         results = [(self.fitbit_dir.joinpath(*parents), files) for parents, files in matches]
         return results
 
-
+if __name__ == "__main__":
+    loader = StructureDataLoader()
+    paths = loader.find_paths("heart_rate")
+    for path, files in paths:
+        print(f"Path: {path}, Files: {files}")

@@ -16,7 +16,7 @@ step_data = preprocessor.process_step_count(part_id= part_ids)
 cycles = participant_loader.cycle_data(part_id = part_ids)
 
 n_parts = len(part_ids)
-nrows = 3            # two rows: top = HRV plot, bottom = user-defined plot
+nrows = 3            # two rows: top = HRV plot, bottom = z-score diff plot
 ncols = n_parts      # one column per participant
 
 fig, axes = plt.subplots(
@@ -24,7 +24,7 @@ fig, axes = plt.subplots(
     ncols,
     figsize=(10 * ncols, 5 * nrows),
     squeeze=False, 
-    sharex="col"
+    sharex="col",
 )
 
 for i, part_id in enumerate(part_ids):
@@ -68,8 +68,6 @@ for i, part_id in enumerate(part_ids):
 
 
     ### AX MIDDLE
-    # Middle subplot (placeholder for user)
-    # fill ax_middle with your custom plots
     ax_middle.set_zorder(2)
     ax2_middle = ax_middle.twinx()
 
@@ -121,7 +119,25 @@ for i, part_id in enumerate(part_ids):
         )
         .sort_values('dateTime')
     )
+    def _align_metric_against_ref(metric_df, value_col, ref_df, ref_col):
+        aligned_df =  (
+            metric_df[["dateTime", value_col]]
+            .assign(dateTime=lambda df: pd.to_datetime(df["dateTime"]))
+            .merge(
+                ref_df[["date", ref_col]]
+                .assign(dateTime=lambda df: pd.to_datetime(df["date"]))[["dateTime", ref_col]]
+                .dropna()
+                .drop_duplicates(subset="dateTime"),
+                on="dateTime",
+                how="inner",
+            )
+            .sort_values("dateTime")
+        )
+        aligned_df = aligned_df.rename(columns={'dateTime': 'dateTime'})
+        return aligned_df
 
+    rhr_aligned = _align_metric_against_ref(part_rhr_data, "value", part_step_data, "daily_steps_ma5")
+    hrv_aligned = _align_metric_against_ref(part_hrv_data, "rmssd", part_step_data, "daily_steps_ma5")
     z_score_diff_rhr = z_score_diff(rhr_aligned['value'], rhr_aligned['daily_steps_ma5'])
     z_score_diff_hrv = z_score_diff(hrv_aligned['rmssd'], hrv_aligned['daily_steps_ma5'])
 

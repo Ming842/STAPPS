@@ -94,10 +94,10 @@ class ParticipantDataLoader():
 
             path = self.data_dir.joinpath(participant_dir, dpath)
 
-        pattern = r"-\s*YYYY-MM-DD"
+        pattern = r"\s*YYYY-MM-DD"
         if any(re.search(pattern, filename) for filename in dtype):
             base_names = [
-                    re.sub(r"\s*-\s*YYYY-MM-DD(?:\.(?:csv|txt|xlsx|json))?$", "", filename)
+                    re.sub(r"\s*\s*YYYY-MM-DD(?:\.(?:csv|txt|xlsx|json))?$", "", filename)
                     for filename in dtype
                 ]
 
