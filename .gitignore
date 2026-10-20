@@ -29,6 +29,10 @@ Data/
 data/
 .data/
 
+.plots/
+plots/
+Plots/
+
 # Node
 node_modules/
 .npm/
