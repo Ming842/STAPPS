@@ -1,7 +1,7 @@
 """Application configuration and shared constants."""
 
 DEBUG = False
-LOC = "Home"
+LOC = "Work"
 
 if LOC == "Home":
     DATA_DIR = "E:\\Data\\Zip-files pilot patienten"

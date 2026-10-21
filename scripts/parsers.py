@@ -72,3 +72,75 @@ def align_metric_against_ref(metric_df, value_date, value_col, ref_df, ref_date,
             .sort_values("dateTime")
         )
         return aligned_df
+
+def get_moving_mean_valid(data: pd.DataFrame, windows: list[int]) -> dict[int, pd.Series]:
+    """Return rolling means for each window, while allowing at most one invalid day.
+
+    The input may be a DataFrame with a ``date``/``dateTime`` column and a numeric
+    value column (such as ``cadence`` or ``rmssd``), or a Series. For a Series,
+    the index is treated as the date axis when it is datetime-like.
+    """
+    if isinstance(windows, int):
+        windows = [windows]
+    else:
+        windows = list(windows)
+
+    if isinstance(data, pd.Series):
+        series = data.copy()
+        value_name = series.name if series.name not in {None, "date", "dateTime"} else "value"
+        if isinstance(series.index, pd.DatetimeIndex):
+            data = pd.DataFrame({"date": series.index, value_name: series.to_numpy()})
+        else:
+            data = pd.DataFrame({"date": pd.to_datetime(series.index, errors="coerce"), value_name: series.to_numpy()})
+    else:
+        data = data.copy()
+
+    if data.empty:
+        return {window: pd.Series(dtype=float) for window in windows}
+
+    if "date" not in data.columns:
+        if "dateTime" in data.columns:
+            data["date"] = pd.to_datetime(data["dateTime"], errors="coerce")
+        elif isinstance(data.index, pd.DatetimeIndex):
+            data["date"] = data.index
+        else:
+            data["date"] = pd.to_datetime(data.index, errors="coerce")
+
+    if "cadence" in data.columns:
+        value_col = "cadence"
+    elif "rmssd" in data.columns:
+        value_col = "rmssd"
+    elif "value" in data.columns:
+        value_col = "value"
+    else:
+        value_cols = [c for c in data.columns if c not in {"date", "dateTime", "zone"}]
+        if not value_cols:
+            raise ValueError("No numeric value column found for moving mean computation")
+        value_col = value_cols[0]
+
+    data = data[["date", value_col, *(["zone"] if "zone" in data.columns else [])]].copy()
+    data = data.sort_values("date").reset_index(drop=True)
+
+    if "zone" in data.columns:
+        grouped = []
+        for _, zone_df in data.groupby("zone", sort=False):
+            zone_df = zone_df.sort_values("date").reset_index(drop=True)
+            valid_series = zone_df[value_col].notna()
+            zone_output = []
+            for window in windows:
+                rolling = zone_df[value_col].rolling(window=window, min_periods=1).mean()
+                invalid_days = (~valid_series).rolling(window=window, min_periods=1).sum()
+                zone_output.append(rolling.where(invalid_days <= 1))
+            grouped.append(pd.concat(zone_output, axis=1, keys=windows))
+        result = {}
+        for window in windows:
+            result[window] = pd.concat([g[window] for g in grouped], axis=0)
+        return result
+
+    valid_series = data[value_col].notna()
+    result = {}
+    for window in windows:
+        rolling = data[value_col].rolling(window=window, min_periods=1).mean()
+        invalid_days = (~valid_series).rolling(window=window, min_periods=1).sum()
+        result[window] = rolling.where(invalid_days <= 1)
+    return result

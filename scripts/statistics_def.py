@@ -17,7 +17,7 @@ def z_score_diff(series1, series2)-> pd.Series:
 
 def get_hr_zones(hr_data: pd.DataFrame, cycle_data: pd.DataFrame) -> pd.Series:
     """Categorize heart rate into zones based on thresholds."""
-
+    
     if cycle_data.empty:
         raise ValueError("Cycle data is empty. Cannot determine heart rate zones without cycle information.")
 
@@ -28,7 +28,11 @@ def get_hr_zones(hr_data: pd.DataFrame, cycle_data: pd.DataFrame) -> pd.Series:
     if not {"Period", "Date"}.issubset(cycle_data.columns):
         raise ValueError("cycle_data must contain the columns 'Period' and 'Date'.")
 
+    hr_data = hr_data.copy()
+
     c1_rows = cycle_data.loc[cycle_data["Period"] == "C1", "Date"]
+    if c1_rows.empty:
+        c1_rows = cycle_data.loc[cycle_data["Period"].astype(str).str.startswith("Week"), "Date"]
     if c1_rows.empty:
         raise ValueError("cycle_data does not contain a C1 date.")
 
@@ -66,8 +70,6 @@ def get_hr_zones(hr_data: pd.DataFrame, cycle_data: pd.DataFrame) -> pd.Series:
         "median": baseline["bpm"].median(),
         "max": baseline["bpm"].max(),
     }
-    print(baseline_stats)
-
     max_bpm = baseline_stats["max"]
     if pd.isna(max_bpm) or max_bpm <= 0:
         raise ValueError("Baseline heart rate data must contain positive bpm values.")

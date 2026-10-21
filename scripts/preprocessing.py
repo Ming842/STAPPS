@@ -1,8 +1,11 @@
 """Preprocessing module for data files in STAPPS."""
+import logging
+
 import pandas as pd
 
 from config import DATA_DIR
 from loaders import ParticipantDataLoader
+from parsers import normalize_part_ids
 from structure_loader import StructureDataLoader
 
 class Preprocessor:
@@ -286,52 +289,107 @@ class Preprocessor:
 
         return pd.concat(frames, ignore_index=True)
 
-    def merge_cadence_with_hr(self,cadence_data: pd.DataFrame, hr_data: pd.DataFrame) -> pd.DataFrame:
-        """Merge cadence data with heart rate data based on the closest timestamp."""
-        if cadence_data.empty or hr_data.empty:
-            raise ValueError("Both cadence_data and hr_data must be non-empty DataFrames.")
 
-        if "dateTime" not in cadence_data.columns or "dateTime" not in hr_data.columns:
-            raise ValueError("Both DataFrames must contain a 'dateTime' column.")
+    
+def load_plot_data(part_ids: list, data_types=None):
+    participant_loader = ParticipantDataLoader()
+    preprocessor = Preprocessor()
 
-        # Ensure dateTime columns are in datetime format
-        cadence_data["dateTime"] = pd.to_datetime(cadence_data["dateTime"], errors="coerce")
-        hr_data["dateTime"] = pd.to_datetime(hr_data["dateTime"], errors="coerce")
+    part_ids = normalize_part_ids(part_ids)
 
-        # Drop rows with NaT in dateTime
-        cadence_data = cadence_data.dropna(subset=["dateTime"])
-        hr_data = hr_data.dropna(subset=["dateTime"])
+    valid_types = {"rhr", "hrv", "hr", "steps", "cycles"}
+    if data_types is None:
+        logging.info("No data types specified. Defaulting to all available types.", UserWarning)
+        data_types = ("rhr", "hrv", "hr", "steps", "cycles")
+    elif isinstance(data_types, str):
+        data_types = (data_types,)
 
-        # Sort both DataFrames by dateTime
-        cadence_data = cadence_data.sort_values("dateTime").reset_index(drop=True)
-        hr_data = hr_data.sort_values("dateTime").reset_index(drop=True)
-        hr_data["zone_num"] = pd.to_numeric(
-            hr_data["zone"].str.replace("zone", "", regex=False),
-            errors="coerce"
-        )
-        hr_minute = (
-            hr_data
-            .set_index("dateTime")
-            .resample("1min")
-            .agg({
-                "bpm": "max",
-                "zone_num": "max"
-            })
-            .reset_index()
-        )
+    invalid = set(data_types) - valid_types
+    if invalid:
+        raise ValueError(f"Unsupported data types: {sorted(invalid)}\n Supported types: {sorted(valid_types)}")
 
-        hr_minute["zone"] = "zone" + hr_minute["zone_num"].astype(str)
-        hr_minute.drop(columns="zone_num", inplace=True)
-        # Merge using merge_asof to find the closest previous timestamp
-        merged_df = pd.merge_asof(
-            cadence_data,
-            hr_minute,
-            on="dateTime",
-            direction="backward",
-            suffixes=("_cadence", "_hr")
+    payload = {}
+
+    if "rhr" in data_types:
+        payload["rhr"] = preprocessor.process_resting_heart_rate(part_id=part_ids)
+    if "hrv" in data_types:
+        payload["hrv"] = preprocessor.process_heart_rate_variability(part_id=part_ids)
+    if "hr" in data_types:
+        payload["hr"] = preprocessor.process_heart_rate(part_id=part_ids)
+    if "steps" in data_types:
+        payload["steps"] = preprocessor.process_step_count(part_id=part_ids)
+    if "cycles" in data_types:
+        payload["cycles"] = participant_loader.cycle_data(part_id=part_ids)
+
+    # Backward-compatible default return shape
+    if data_types == ("rhr", "hrv", "steps", "cycles"):
+        return (
+            part_ids,
+            payload.get("rhr"),
+            payload.get("hrv"),
+            payload.get("hr"),
+            payload.get("steps"),
+            payload.get("cycles"),
         )
 
-        return merged_df
+    return part_ids, payload
+def merge_cadence_with_hr(cadence_data: pd.DataFrame, hr_data: pd.DataFrame) -> pd.DataFrame:
+    """Merge cadence data with heart rate data based on the closest timestamp."""
+    if cadence_data.empty or hr_data.empty:
+        raise ValueError("Both cadence_data and hr_data must be non-empty DataFrames.")
+
+    if "dateTime" not in cadence_data.columns or "dateTime" not in hr_data.columns:
+        raise ValueError("Both DataFrames must contain a 'dateTime' column.")
+
+    # Ensure dateTime columns are in datetime format
+    cadence_data["dateTime"] = pd.to_datetime(cadence_data["dateTime"], errors="coerce")
+    hr_data["dateTime"] = pd.to_datetime(hr_data["dateTime"], errors="coerce")
+
+    # Drop rows with NaT in dateTime
+    cadence_data = cadence_data.dropna(subset=["dateTime"])
+    hr_data = hr_data.dropna(subset=["dateTime"])
+
+    # Sort both DataFrames by dateTime
+    cadence_data = cadence_data.sort_values("dateTime").reset_index(drop=True)
+    hr_data = hr_data.sort_values("dateTime").reset_index(drop=True)
+    hr_data["zone_num"] = pd.to_numeric(
+        hr_data["zone"].str.replace("zone", "", regex=False),
+        errors="coerce"
+    )
+    hr_minute = (
+        hr_data
+        .set_index("dateTime")
+        .resample("1min")
+        .agg({
+            "bpm": "median",
+            "zone_num": "median"
+        })
+        .reset_index()
+    )
+
+    # Median zone values can land on .5 (e.g. 1.5), but HR zones are discrete.
+    # Round to the nearest whole zone after aggregation and keep the value integer-based.
+    hr_minute["zone_num"] = hr_minute["zone_num"].round().astype("Int64")
+    hr_minute["zone"] = hr_minute["zone_num"].map(
+        lambda value: f"zone{int(value)}" if pd.notna(value) else pd.NA
+    )
+    hr_minute.drop(columns="zone_num", inplace=True)
+    # Merge using merge_asof to find the closest previous timestamp
+    merged_df = pd.merge_asof(
+        cadence_data,
+        hr_minute,
+        on="dateTime",
+        direction="backward",
+        suffixes=("_cadence", "_hr")
+    )
+
+    return merged_df
+
+def part_isin_data(part_id, data):
+    """Check if a participant ID is present in the provided data."""
+    for key in data.keys():
+        data[key] = data[key][data[key]['participant_id'].isin(part_id)]
+    return data
 
 if __name__ == "__main__":
     preprocessor = Preprocessor()
