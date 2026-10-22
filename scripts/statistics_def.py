@@ -156,8 +156,6 @@ def mixed_effects_model(data: pd.DataFrame):
     result =    model.fit()
     return result
 
-
-
 if __name__ == "__main__":
     pat_ids = list(range(1, 31))
     pat_ids, data = load_plot_data(pat_ids, data_types=("steps", "cycles")) 

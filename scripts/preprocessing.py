@@ -914,7 +914,6 @@ def get_before_and_after_chemo(data):
             if c2_date.empty:
                 logging.warning(f"No C2 date found for participant {part_id}. Using last datapoint")
                 c2_date = df_no_ae[time_col][df_no_ae["participant_id"] == part_id].max().normalize()  # Normalize to remove time component
-                continue
             else:
                 c2_date = c2_date.item().normalize() # Normalize to remove time component       
             mask = df_no_ae["participant_id"] == part_id
