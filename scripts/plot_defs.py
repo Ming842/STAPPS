@@ -1,30 +1,31 @@
 import logging
+from typing import Any
 
-from matplotlib.colors import LinearSegmentedColormap
-import matplotlib.pyplot as plt
 import matplotlib as mpl
-import pandas as pd
+import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
+from matplotlib.colors import LinearSegmentedColormap
 
-from preprocessing import Preprocessor, load_plot_data, merge_cadence_with_hr
 from loaders import ParticipantDataLoader
-from parsers import normalize_part_ids, align_metric_against_ref, get_moving_mean_valid
+from parsers import align_metric_against_ref, get_moving_mean_valid, normalize_part_ids
+from preprocessing import Preprocessor, load_plot_data, merge_cadence_with_hr
 
 
 def _plot_event_periods(
-    ax,
-    periods,
-    line_color="red",
-    span_color="red",
-    line_style="--",
-    alpha=0.2,
-    label=None,
-):
+    ax: plt.Axes,
+    periods: Any,
+    line_color: str = "red",
+    span_color: str = "red",
+    line_style: str = "--",
+    alpha: float = 0.2,
+    label: str | None = None,
+) -> None:
     """Draw event markers and optional shaded spans on a Matplotlib axis.
 
     Args:
-        ax (matplotlib.axes.Axes): Axis to draw the event annotations on.
-        periods (list | pd.Timestamp | None): Event date(s) or event intervals to plot.
+        ax (plt.Axes): Axis to draw the event annotations on.
+        periods (Any): Event date(s) or event intervals to plot.
         line_color (str): Color used for the event line and label. Defaults to "red".
         span_color (str): Fill color for time spans. Defaults to "red".
         line_style (str): Style for the vertical event marker lines. Defaults to "--".
@@ -36,7 +37,7 @@ def _plot_event_periods(
     """
     first = True
 
-    def _plot_marker(date):
+    def _plot_marker(date: pd.Timestamp) -> None:
         nonlocal first
 
         ax.axvline(
@@ -45,7 +46,6 @@ def _plot_event_periods(
             linestyle=line_style,
             label=label if first else None,
         )
-        # Keep labels readable while avoiding repeated annotation clutter.
         label_height = {
             "Hospitalization": 0.7,
             "ED Visit": 0.8,
@@ -64,7 +64,7 @@ def _plot_event_periods(
 
         first = False
 
-    def _plot_span(start, end):
+    def _plot_span(start: pd.Timestamp, end: pd.Timestamp) -> None:
         ax.axvspan(
             start,
             end,
@@ -74,15 +74,11 @@ def _plot_event_periods(
         _plot_marker(start)
 
     for period in periods:
-
         if period is None:
             continue
 
-        # Single date
         if isinstance(period, pd.Timestamp):
             _plot_marker(period)
-
-        # [date1, date2] -> two separate markers
         elif (
             isinstance(period, list)
             and len(period) == 2
@@ -90,17 +86,10 @@ def _plot_event_periods(
         ):
             for date in period:
                 _plot_marker(date)
-
-        # Handle nested structures
         elif isinstance(period, list):
-
             for item in period:
-
-                # [date, [start, end]]
                 if isinstance(item, pd.Timestamp):
                     _plot_marker(item)
-
-                # [[start, end]] -> span
                 elif (
                     isinstance(item, list)
                     and len(item) == 2
@@ -108,13 +97,12 @@ def _plot_event_periods(
                 ):
                     _plot_span(*item)
 
-
-def plot_weekends_spans(ax, steps_data):
+def plot_weekends_spans(ax: plt.Axes, steps_data: pd.DataFrame) -> None:
     """Shade weekend periods on a plot based on the available timestamps.
 
     Args:
-        ax (matplotlib.axes.Axes): Axis to add the weekend shading to.
-        steps_data (pandas.DataFrame): DataFrame containing a ``dateTime`` column.
+        ax (plt.Axes): Axis to add the weekend shading to.
+        steps_data (pd.DataFrame): DataFrame containing a dateTime column.
 
     Returns:
         None: Draws weekend spans directly on the supplied axis.
@@ -122,7 +110,6 @@ def plot_weekends_spans(ax, steps_data):
     data = steps_data.copy()
     data["dateTime"] = pd.to_datetime(data["dateTime"], errors="coerce")
 
-    # Remove invalid timestamps first to avoid NaT comparison errors.
     unique_dates = (
         data["dateTime"]
         .dropna()
@@ -133,7 +120,7 @@ def plot_weekends_spans(ax, steps_data):
 
     weekend_labeled = False
     for date in unique_dates:
-        if date.weekday() == 5:  # Saturday
+        if date.weekday() == 5:
             ax.axvspan(
                 date,
                 date + pd.Timedelta(days=2),
@@ -143,13 +130,12 @@ def plot_weekends_spans(ax, steps_data):
             )
             weekend_labeled = True
 
-
-def plot_cycle_markers(ax, cycles):
+def plot_cycle_markers(ax: plt.Axes, cycles: dict[str, Any]) -> None:
     """Plot vertical cycle-change markers and label them on the axis.
 
     Args:
-        ax (matplotlib.axes.Axes): Axis to annotate with cycle markers.
-        cycles (dict): Cycle metadata including ``Date`` and ``Period`` entries.
+        ax (plt.Axes): Axis to annotate with cycle markers.
+        cycles (dict[str, Any]): Cycle metadata including Date and Period entries.
 
     Returns:
         None: Draws cycle lines and labels directly on the axis.
@@ -165,13 +151,12 @@ def plot_cycle_markers(ax, cycles):
                 rotation=90, va="bottom", ha="right", color="red")
         labeled = True
 
-
-def plot_all_event_periods(ax, cycles):
+def plot_all_event_periods(ax: plt.Axes, cycles: dict[str, Any]) -> None:
     """Plot hospitalization, ED visit, and HCP contact periods from cycle metadata.
 
     Args:
-        ax (matplotlib.axes.Axes): Axis to plot event annotations on.
-        cycles (dict): Dictionary containing event date columns.
+        ax (plt.Axes): Axis to plot event annotations on.
+        cycles (dict[str, Any]): Dictionary containing event date columns.
 
     Returns:
         None: Draws all event markers and spans to the supplied axis.
@@ -186,14 +171,13 @@ def plot_all_event_periods(ax, cycles):
                            line_color=line_color, span_color=span_color,
                            alpha=alpha, label=label)
 
-
-def plot_info(ax, cycles, data):
+def plot_info(ax: plt.Axes, cycles: dict[str, Any], data: pd.DataFrame) -> None:
     """Draw cycle markers, clinical events, and weekend spans in one plot layer.
 
     Args:
-        ax (matplotlib.axes.Axes): Axis to annotate.
-        cycles (dict): Cycle and event metadata.
-        data (pandas.DataFrame): Source data used for weekend shading.
+        ax (plt.Axes): Axis to annotate.
+        cycles (dict[str, Any]): Cycle and event metadata.
+        data (pd.DataFrame): Source data used for weekend shading.
 
     Returns:
         None: Adds all plot annotations to the axis.
@@ -202,15 +186,14 @@ def plot_info(ax, cycles, data):
     plot_all_event_periods(ax, cycles)
     plot_weekends_spans(ax, data)
 
-
-def plot_rhr(ax, rhr_data, label, style=None, window=3):
+def plot_rhr(ax: plt.Axes, rhr_data: pd.DataFrame, label: str, style: dict[str, Any] | None = None, window: int = 3) -> None:
     """Plot resting heart rate while keeping missing days from creating false gaps.
 
     Args:
-        ax (matplotlib.axes.Axes): Axis to plot on.
-        rhr_data (pandas.DataFrame): DataFrame with ``dateTime`` and ``value`` columns.
+        ax (plt.Axes): Axis to plot on.
+        rhr_data (pd.DataFrame): DataFrame with dateTime and value columns.
         label (str): Legend label for the series.
-        style (dict | None): Matplotlib plotting style dictionary. Defaults to None.
+        style (dict[str, Any] | None): Matplotlib plotting style dictionary. Defaults to None.
         window (int): Moving-average window size. Defaults to 3.
 
     Returns:
@@ -228,7 +211,6 @@ def plot_rhr(ax, rhr_data, label, style=None, window=3):
     valid_rhr["dateTime"] = pd.to_datetime(valid_rhr["dateTime"], errors="coerce")
     valid_rhr = valid_rhr.dropna(subset=["dateTime", "value"]).sort_values("dateTime").reset_index(drop=True)
 
-    # Create a daily timeline so we only smooth across valid observations.
     if not valid_rhr.empty:
         full_index = pd.date_range(
             valid_rhr["dateTime"].min(),
@@ -252,16 +234,15 @@ def plot_rhr(ax, rhr_data, label, style=None, window=3):
         **style
     )
 
-
-def plot_hrv_over_time(ax, hrv_data, label, window, style=None):
+def plot_hrv_over_time(ax: plt.Axes, hrv_data: pd.DataFrame, label: str, window: int, style: dict[str, Any] | None = None) -> None:
     """Plot RMSSD over time while skipping long periods of missing data.
 
     Args:
-        ax (matplotlib.axes.Axes): Axis to plot on.
-        hrv_data (pandas.DataFrame): DataFrame with ``dateTime`` and ``rmssd`` columns.
+        ax (plt.Axes): Axis to plot on.
+        hrv_data (pd.DataFrame): DataFrame with dateTime and rmssd columns.
         label (str): Legend label for the HRV series.
         window (int): Moving-average window size.
-        style (dict | None): Matplotlib plotting style dictionary. Defaults to None.
+        style (dict[str, Any] | None): Matplotlib plotting style dictionary. Defaults to None.
 
     Returns:
         None: Plots the smoothed HRV series to the supplied axis.
@@ -279,7 +260,6 @@ def plot_hrv_over_time(ax, hrv_data, label, window, style=None):
     valid_hrv["dateTime"] = pd.to_datetime(valid_hrv["dateTime"], errors="coerce")
     valid_hrv = valid_hrv.dropna(subset=["dateTime", "rmssd"]).sort_values("dateTime").reset_index(drop=True)
 
-    # Reindex to a regular daily grid to avoid drawing a line through missing periods.
     if not valid_hrv.empty:
         full_index = pd.date_range(
             valid_hrv["dateTime"].min(),
@@ -303,20 +283,18 @@ def plot_hrv_over_time(ax, hrv_data, label, window, style=None):
         **style
     )
 
-
-def plot_steps_over_time(ax, steps_data, label, style=None):
+def plot_steps_over_time(ax: plt.Axes, steps_data: pd.DataFrame, label: str, style: dict[str, Any] | None = None) -> None:
     """Plot cumulative daily step traces across the time span of the data.
 
     Args:
-        ax (matplotlib.axes.Axes): Axis to plot on.
-        steps_data (pandas.DataFrame): DataFrame containing ``dateTime`` and ``cumsum`` columns.
+        ax (plt.Axes): Axis to plot on.
+        steps_data (pd.DataFrame): DataFrame containing dateTime and cumsum columns.
         label (str): Legend label for the participant or trace.
-        style (dict | None): matplotlib plotting style options. Defaults to None.
+        style (dict[str, Any] | None): Matplotlib plotting style options. Defaults to None.
 
     Returns:
         None: Adds the step traces to the supplied axis.
     """
-    # Plot per-day cumulative step traces; label only on the first traced day.
     if style is None:
         style = {
             "color": "blue",
@@ -332,15 +310,14 @@ def plot_steps_over_time(ax, steps_data, label, style=None):
         )
         labeled = True
 
-
-def plot_steps_moving_average(ax, steps_data, windows: list[int] = [5], style=None):
+def plot_steps_moving_average(ax: plt.Axes, steps_data: pd.DataFrame, windows: list[int] = [5], style: dict[str, Any] | None = None) -> None:
     """Plot one or more moving-average step trends for the daily step series.
 
     Args:
-        ax (matplotlib.axes.Axes): Axis to plot on.
-        steps_data (pandas.DataFrame): DataFrame containing daily step columns such as ``daily_steps_ma5``.
+        ax (plt.Axes): Axis to plot on.
+        steps_data (pd.DataFrame): DataFrame containing daily step columns such as daily_steps_ma5.
         windows (list[int]): Moving-average windows to plot. Defaults to [5].
-        style (dict | None): Extra matplotlib styling to apply to each line. Defaults to None.
+        style (dict[str, Any] | None): Extra matplotlib styling to apply to each line. Defaults to None.
 
     Returns:
         None: Draws step moving-average lines into the supplied axis.
@@ -388,18 +365,17 @@ def plot_steps_moving_average(ax, steps_data, windows: list[int] = [5], style=No
 
     ax.set_ylabel("Steps")
 
-
-def plot_hr_zones(ax, part_heart_data, zone_thresholds, cmap=None):
+def plot_hr_zones(ax: plt.Axes, part_heart_data: pd.DataFrame, zone_thresholds: dict[str, float], cmap: Any = None) -> plt.Axes:
     """Draw horizontal heart-rate zones as colored bands on the provided axis.
 
     Args:
-        ax (matplotlib.axes.Axes): Primary axis to draw the zone bands on.
-        part_heart_data (pandas.DataFrame): Heart-rate data containing a ``bpm`` column.
-        zone_thresholds (dict): Mapping of heart-rate zone names to upper bounds.
-        cmap (matplotlib.colors.Colormap | None): Colormap used for zone coloring. Defaults to None.
+        ax (plt.Axes): Primary axis to draw the zone bands on.
+        part_heart_data (pd.DataFrame): Heart-rate data containing a bpm column.
+        zone_thresholds (dict[str, float]): Mapping of heart-rate zone names to upper bounds.
+        cmap (Any): Colormap used for zone coloring. Defaults to None.
 
     Returns:
-        matplotlib.axes.Axes: Secondary axis created for zone labels.
+        plt.Axes: Secondary axis created for zone labels.
     """
     if cmap is None:
         cmap = mpl.colormaps.get_cmap("RdYlGn_r")
@@ -433,17 +409,16 @@ def plot_hr_zones(ax, part_heart_data, zone_thresholds, cmap=None):
 
     return ax_zone
 
-
-def plot_hr_cadence(ax, data_merge, window_size, zones_to_omit: tuple[int, ...] = (1, 4, 5), cmap=None, style=None):
+def plot_hr_cadence(ax: plt.Axes, data_merge: pd.DataFrame, window_size: int, zones_to_omit: tuple[int, ...] = (1, 4, 5), cmap: Any = None, style: dict[str, Any] | None = None) -> None:
     """Plot median cadence by heart-rate zone, smoothed over time.
 
     Args:
-        ax (matplotlib.axes.Axes): Axis to draw the cadence traces on.
-        data_merge (pandas.DataFrame): Merged heart-rate and cadence data.
+        ax (plt.Axes): Axis to draw the cadence traces on.
+        data_merge (pd.DataFrame): Merged heart-rate and cadence data.
         window_size (int): Moving-average window used for the cadence smoothing.
         zones_to_omit (tuple[int, ...]): Zone numbers to skip from plotting. Defaults to (1, 4, 5).
-        cmap (matplotlib.colors.Colormap | None): Colormap for per-zone line colors. Defaults to None.
-        style (dict | None): Matplotlib style arguments for each line. Defaults to None.
+        cmap (Any): Colormap for per-zone line colors. Defaults to None.
+        style (dict[str, Any] | None): Matplotlib style arguments for each line. Defaults to None.
 
     Returns:
         None: Draws all cadence lines on the axis.
@@ -468,7 +443,6 @@ def plot_hr_cadence(ax, data_merge, window_size, zones_to_omit: tuple[int, ...] 
             ]
         )
 
-    # Group by HR zone and compute a median cadence for each date.
     data_merge["date"] = pd.to_datetime(data_merge["dateTime"], errors="coerce").dt.date
     median_cadence_by_zone = (
         data_merge.groupby(["date", "zone"])["cadence"]
@@ -505,15 +479,14 @@ def plot_hr_cadence(ax, data_merge, window_size, zones_to_omit: tuple[int, ...] 
         frac = i / max(1, len(median_cadence_by_zone["zone"].unique()) - 1)
         ax.plot(zone_series.index, zone_series.values, label=f"{window_size}-day mov avg: {zone}", color=cmap(frac), **style)
 
-
-def plot_hr_over_time(ax, hr_data, label, style=None):
+def plot_hr_over_time(ax: plt.Axes, hr_data: pd.DataFrame, label: str, style: dict[str, Any] | None = None) -> None:
     """Plot heart-rate values over time for a participant.
 
     Args:
-        ax (matplotlib.axes.Axes): Axis to draw the heart-rate series on.
-        hr_data (pandas.DataFrame): DataFrame with ``dateTime`` and ``bpm`` columns.
+        ax (plt.Axes): Axis to draw the heart-rate series on.
+        hr_data (pd.DataFrame): DataFrame with dateTime and bpm columns.
         label (str): Legend label for the line.
-        style (dict | None): Matplotlib style options. Defaults to None.
+        style (dict[str, Any] | None): Matplotlib style options. Defaults to None.
 
     Returns:
         None: Adds the heart-rate trace to the axis.
@@ -532,14 +505,13 @@ def plot_hr_over_time(ax, hr_data, label, style=None):
         **style
     )
 
-
-def plot_zone_ratios(ax, data_merge, cmap=None):
+def plot_zone_ratios(ax: plt.Axes, data_merge: pd.DataFrame, cmap: Any = None) -> None:
     """Plot the ratio of time spent in each heart-rate zone by day.
 
     Args:
-        ax (matplotlib.axes.Axes): Axis to plot the stacked zone ratios on.
-        data_merge (pandas.DataFrame): DataFrame containing ``dateTime`` and ``zone`` columns.
-        cmap (matplotlib.colors.Colormap | None): Colormap for the stacked areas. Defaults to None.
+        ax (plt.Axes): Axis to plot the stacked zone ratios on.
+        data_merge (pd.DataFrame): DataFrame containing dateTime and zone columns.
+        cmap (Any): Colormap for the stacked areas. Defaults to None.
 
     Returns:
         None: Draws the zone-ratio stack plot on the axis.
@@ -547,7 +519,6 @@ def plot_zone_ratios(ax, data_merge, cmap=None):
     if cmap is None:
         cmap = mpl.colormaps.get_cmap("RdYlGn_r")
 
-    # Count occurrences of each zone per day.
     data_merge["date"] = data_merge["dateTime"].dt.date
     zone_counts = (
         data_merge.groupby(["date", "zone"])
@@ -555,10 +526,7 @@ def plot_zone_ratios(ax, data_merge, cmap=None):
         .unstack(fill_value=0)
     )
 
-    # Calculate ratios.
     zone_ratios = zone_counts.div(zone_counts.sum(axis=1), axis=0)
-
-    # Plot each zone's ratio over time.
     zones = list(zone_ratios.columns)
     colors = [cmap(i / max(1, len(zones) - 1)) for i in range(len(zones))]
 
@@ -569,17 +537,15 @@ def plot_zone_ratios(ax, data_merge, cmap=None):
         colors=colors,
         alpha=0.6,
     )
-    # Set y axis limits to min of zone 1.
     ax.set_ylim(zone_ratios.iloc[:, 0].min() - 0.05, 1)
 
-
-def plot_step_zone_ratios(ax, data_merge, cmap=None):
+def plot_step_zone_ratios(ax: plt.Axes, data_merge: pd.DataFrame, cmap: Any = None) -> None:
     """Plot total daily steps stacked by heart-rate zone.
 
     Args:
-        ax (matplotlib.axes.Axes): Axis to plot the stacked step totals on.
-        data_merge (pandas.DataFrame): Heart-rate/step data with ``dateTime``, ``value``, and ``zone`` columns.
-        cmap (matplotlib.colors.Colormap | None): Colormap to use for stacked areas. Defaults to None.
+        ax (plt.Axes): Axis to plot the stacked step totals on.
+        data_merge (pd.DataFrame): Heart-rate/step data with dateTime, value, and zone columns.
+        cmap (Any): Colormap to use for stacked areas. Defaults to None.
 
     Returns:
         None: Draws the daily step budget by zone.
@@ -627,15 +593,14 @@ def plot_step_zone_ratios(ax, data_merge, cmap=None):
     ax.set_ylim(bottom=zone_totals.sum(axis=1).min() - 100)
     ax.margins(x=0.01)
 
-
-def create_figure_field(part_ids):
+def create_figure_field(part_ids: list[int]) -> tuple[plt.Figure, np.ndarray]:
     """Create a grid of axes for a small set of participant panels.
 
     Args:
         part_ids (list[int]): Participant identifiers to include in the figure.
 
     Returns:
-        tuple[matplotlib.figure.Figure, numpy.ndarray]: Figure and axes array for the generated panel layout.
+        tuple[plt.Figure, np.ndarray]: Figure and axes array for the generated panel layout.
     """
     n_parts = len(part_ids)
     nrows = 1 if n_parts == 1 else 2
@@ -655,8 +620,7 @@ def create_figure_field(part_ids):
 
     return fig, axes
 
-
-def create_figure_panel(part_ids, nrows=2):
+def create_figure_panel(part_ids: list[int], nrows: int = 2) -> tuple[plt.Figure, np.ndarray]:
     """Create a panel layout with one column per participant.
 
     Args:
@@ -664,7 +628,7 @@ def create_figure_panel(part_ids, nrows=2):
         nrows (int): Number of rows in the figure layout. Defaults to 2.
 
     Returns:
-        tuple[matplotlib.figure.Figure, numpy.ndarray]: Figure and axes grid for the participant panel.
+        tuple[plt.Figure, np.ndarray]: Figure and axes grid for the participant panel.
     """
     n_parts = len(part_ids)
     ncols = n_parts
@@ -679,13 +643,12 @@ def create_figure_panel(part_ids, nrows=2):
 
     return fig, axes
 
-
-def set_legend(ax, ax2=None, loc_primary="upper left", loc_secondary="upper right"):
+def set_legend(ax: plt.Axes, ax2: plt.Axes | None = None, loc_primary: str = "upper left", loc_secondary: str = "upper right") -> None:
     """Attach legends to a primary axis and an optional secondary axis.
 
     Args:
-        ax (matplotlib.axes.Axes): Primary axis with legend handles.
-        ax2 (matplotlib.axes.Axes | None): Secondary axis to add a legend for. Defaults to None.
+        ax (plt.Axes): Primary axis with legend handles.
+        ax2 (plt.Axes | None): Secondary axis to add a legend for. Defaults to None.
         loc_primary (str): Position of the primary legend. Defaults to "upper left".
         loc_secondary (str): Position of the secondary legend. Defaults to "upper right".
 
@@ -701,19 +664,18 @@ def set_legend(ax, ax2=None, loc_primary="upper left", loc_secondary="upper righ
         if handles2:
             ax2.legend(handles2, labels2, loc=loc_secondary)
 
-
-def _plot_participant_panel(ax, part_id, hrv_data, steps_data, cycles):
+def _plot_participant_panel(ax: plt.Axes, part_id: int, hrv_data: pd.DataFrame, steps_data: pd.DataFrame, cycles: pd.DataFrame) -> plt.Axes:
     """Create a compact participant panel with HRV and step trends.
 
     Args:
-        ax (matplotlib.axes.Axes): Axis to plot the panel on.
+        ax (plt.Axes): Axis to plot the panel on.
         part_id (int): Participant identifier.
-        hrv_data (pandas.DataFrame): HRV measurements.
-        steps_data (pandas.DataFrame): Step counts for the same participant.
-        cycles (pandas.DataFrame): Cycle metadata used to annotate periods.
+        hrv_data (pd.DataFrame): HRV measurements.
+        steps_data (pd.DataFrame): Step counts for the same participant.
+        cycles (pd.DataFrame): Cycle metadata used to annotate periods.
 
     Returns:
-        matplotlib.axes.Axes: Secondary axis created for the step trace.
+        plt.Axes: Secondary axis created for the step trace.
     """
     part_hrv_data = hrv_data[hrv_data["participant_id"] == part_id].copy()
     part_hrv_data.loc[part_hrv_data["rmssd"] == 0, "rmssd"] = pd.NA
@@ -738,7 +700,6 @@ def _plot_participant_panel(ax, part_id, hrv_data, steps_data, cycles):
     ax.set_ylabel("HRV (RMSSD)")
 
     return ax2
-
 
 if __name__ == "__main__":
     part_ids = [11, 12, 13, 14, 16, 17, 18, 20]
