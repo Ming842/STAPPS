@@ -123,7 +123,7 @@ def mixed_effects_model(data: pd.DataFrame):
     df.loc[
         df["days_after_chemo"].between(4, 7),
         "period"
-    ] = "post_4_6"
+    ] = "post_4_7"
 
     # Keep participants with baseline and post-treatment RHR data.
     valid = df.dropna(subset=["participant_id", "value"])
@@ -134,7 +134,7 @@ def mixed_effects_model(data: pd.DataFrame):
 
     has_post = set(
         valid.loc[
-            valid["period"].isin(["post_1_3", "post_4_6"]),
+            valid["period"].isin(["post_1_3", "post_4_7"]),
             "participant_id"
         ]
     )
