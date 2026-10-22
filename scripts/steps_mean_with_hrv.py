@@ -32,7 +32,7 @@ def plot_pat_field(ax: plt.Axes, data: dict[str, pd.DataFrame]) -> None:
     cycles = data["cycles"]
 
     plot_hrv_over_time(ax, hrv_data, label="HRV")
-
+    
     ax2 = ax.twinx()
     plot_steps_over_time(ax2, steps_data, label="steps")
     plot_steps_moving_average(ax2, steps_data, windows=[3, 4, 5, 6])
