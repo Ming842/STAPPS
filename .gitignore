@@ -33,6 +33,7 @@ data/
 plots/
 Plots/
 
+scripts/config2.py
 # Node
 node_modules/
 .npm/
