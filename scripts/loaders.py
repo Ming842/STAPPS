@@ -1,29 +1,47 @@
 """Module for loading participant data from the Fitbit export and Cycle event Excel."""
-import re
+import logging
 import os
-import msoffcrypto
-
-import pandas as pd
-from typing import Any
+import re
 from pathlib import Path
+from typing import Any
+
+import msoffcrypto
+import pandas as pd
 
 from config import DATA_DIR, PASSWORD
 from parsers import parse_csv, parse_json, parse_dates
 from structure_loader import StructureDataLoader
 
-class ParticipantDataLoader():
+
+class ParticipantDataLoader:
     """Class to load and manage participant data from the Fitbit export and Cycle data."""
+
     def __init__(self, data_dir: str | Path = DATA_DIR, password: str = PASSWORD) -> None:
+        """Initialize the loader with the project data directory and encrypted Excel password.
+
+        Args:
+            data_dir (str | Path): Root directory that contains participant folders.
+            password (str): File path or value for the decryption password.
+
+        Returns:
+            None: Initializes the data directory and participant metadata.
+        """
         self.data_dir = Path(data_dir)
         self.password = Path(password)
         self.pat_ids, self.pat_dirs = self._get_pt_ids_and_dirs(self.data_dir)
 
     def _get_pt_ids_and_dirs(self, path: Path) -> tuple[list[int], list[Path]]:
-        """Return a list of files and directories in the given path."""
+        """Return participant IDs and their corresponding directories in the data root.
+
+        Args:
+            path (Path): Path to the root data directory.
+
+        Returns:
+            tuple[list[int], list[Path]]: Matching participant IDs and directory paths.
+        """
         if not path.exists():
             raise FileNotFoundError(f"The path {path} does not exist.")
 
-        # Extract participant IDs from entries like "ST02" -> 2
         pt_ids: list[int] = []
         pt_dirs: list[Path] = []
         for item in path.iterdir():
@@ -32,16 +50,22 @@ class ParticipantDataLoader():
                 pt_ids.append(int(m.group(1)))
                 pt_dirs.append(item)
         return pt_ids, pt_dirs
-    
+
     def _format_cycles(self, cycles_data: pd.DataFrame, symptoms: bool) -> pd.DataFrame:
-        """Format the cycles data."""
-        # Placeholder for actual implementation
+        """Format cycle event data according to whether symptom fields are present.
+
+        Args:
+            cycles_data (pd.DataFrame): Raw cycle event table.
+            symptoms (bool): Whether symptom-related columns should be transformed.
+
+        Returns:
+            pd.DataFrame: Formatted cycle data with cleaned columns.
+        """
         count_cols = ["ED_Visits", "Hospitalizations", "Contact_HCP"]
         bool_cols = ["Dose_Modifications", "Chemo Postponed"]
         date_cols = ["ed_visits_date", "hospitalizations_date", "contact_hcp_date"]
         df = cycles_data.copy()
         if symptoms:
-            # --- Count columns: "1 keer" -> 1, "2 keer" -> 2 ---
             for col in count_cols:
                 df[col] = (
                     df[col]
@@ -52,7 +76,6 @@ class ParticipantDataLoader():
                     .fillna(False)
                 )
 
-            # --- Boolean columns: any non-empty text -> True ---
             for col in bool_cols:
                 values = df[col].astype("string").str.strip()
                 df[col] = (
@@ -61,23 +84,30 @@ class ParticipantDataLoader():
                     & values.ne("None.")
                 )
 
-            # --- Date columns: parse dates DD-MM-YYYY or DD-MM-YYYY tm DD-MM-YYYY -> pd.Timestamp ---
             for col in date_cols:
                 df[col] = df[col].apply(parse_dates)
 
         else:
-            # If symptoms is False, set count columns to 0 and boolean columns to False
             for col in [count_cols, bool_cols]:
                 df[col] = False
             for col in date_cols:
                 df[col] = None
         return df
 
-
     def make_file_paths(self, participant_id: int, dpath: Path, dtype: str) -> dict[str, Any]:
-        """Make a file path for a given participant ID and data type."""
+        """Build possible file paths for one participant and data type.
+
+        Args:
+            participant_id (int): Participant ID to resolve.
+            dpath (Path): Relative directory path under the participant folder.
+            dtype (str): File name patterns to match within the directory.
+
+        Returns:
+            dict[str, Any]: Matching file paths for the requested data type.
+        """
         if participant_id not in self.pat_ids:
-            raise ValueError(f"Participant ID {participant_id} not found.")
+            logging.warning(f"Participant ID {participant_id} not found in data directory.")
+            return None
         if len(dtype) == 0:
             raise ValueError(f"Data type must be specified.\n Choose from: {dtype}")
 
@@ -86,7 +116,6 @@ class ParticipantDataLoader():
 
         path = self.data_dir.joinpath(participant_dir, dpath)
         if not path.exists():
-            #change Fitbit in path to Google Health
             dpath = Path(*(
                 "Google Health" if part == "Fitbit" else part
                 for part in dpath.parts
@@ -115,7 +144,14 @@ class ParticipantDataLoader():
         return file_paths
 
     def load_files(self, file_paths: list[Path]) -> list[dict[str, Any]]:
-        """Load data from the given file paths and return a list of dictionaries."""
+        """Load data from the given file paths and return a list of dictionaries.
+
+        Args:
+            file_paths (list[Path]): File paths to load.
+
+        Returns:
+            list[dict[str, Any]]: Parsed records from all successfully loaded files.
+        """
         loaded_data: list[dict[str, Any]] = []
         for file_path in file_paths:
             if not file_path.exists():
@@ -125,16 +161,20 @@ class ParticipantDataLoader():
             elif file_path.suffix == ".json":
                 loaded_data.append(parse_json(file_path))
             elif file_path.suffix == ".txt":
-                #only README files are txt, so they are ignored
                 pass
             else:
                 raise ValueError(f"Unsupported file type: {file_path.suffix}")
         return loaded_data
 
-    def cycle_data(self, part_id = None) -> dict[str, Any]:
-        """Load cycles data."""
+    def cycle_data(self, part_id: int | list[int] | None = None) -> pd.DataFrame:
+        """Load and format the treatment cycle event data for one or more participants.
 
-        # Read password, strip newline/whitespace
+        Args:
+            part_id (int | list[int] | None): Optional participant ID or list of IDs to filter on.
+
+        Returns:
+            pd.DataFrame: Cycle event data with standardized participant and datetime fields.
+        """
         excel_path = Path(os.path.join(self.data_dir, "treatment_data.xlsx"))
         decrypted_path = Path(os.path.join(self.data_dir, "treatment_data_decrypted.xlsx"))
         password_path = Path(self.password)
@@ -149,18 +189,15 @@ class ParticipantDataLoader():
                 office_file.decrypt(decrypted_file)
         sheets = pd.read_excel(decrypted_path, sheet_name=None)
 
-        #remove the decrypted file after reading
         decrypted_path.unlink()
         events = sheets["Cycle_Events"]
 
-        # set PatientID to integer
         events.insert(0, "participant_id", events["PatientID"].str.extract(r"(\d+)").astype(int))
         events.drop(columns=["PatientID"], inplace=True)
 
         if part_id is not None:
             events = events[events["participant_id"].isin(part_id)]
-        
-        #set admission time at 9:00 AM
+
         daily_mask = events["Date"].eq("Dagelijks")
         events.loc[~daily_mask, "Date"] = pd.to_datetime(
             events.loc[~daily_mask, "Date"], errors="coerce"
@@ -169,10 +206,9 @@ class ParticipantDataLoader():
         datetime_mask = pd.to_datetime(
             chemo_admmission["Date"], errors="coerce"
         ).notna()
-        
+
         chemo_admmission.loc[datetime_mask, "Date"] += pd.Timedelta(hours=9)
 
-        # change all entries with date to datetime, and keep the rest as is
         events.loc[:, "Date"] = chemo_admmission["Date"]
         data = pd.DataFrame()
         for _, group in events.groupby("participant_id"):
@@ -185,8 +221,8 @@ class ParticipantDataLoader():
                 cycles["Bijwerking"] = False
             data = pd.concat([data, cycles], ignore_index=True)
 
-
         return data
+
 
 if __name__ == "__main__":
     loader = StructureDataLoader()

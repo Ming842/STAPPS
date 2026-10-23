@@ -3,144 +3,158 @@
 import csv
 import json
 import re
+import logging
+from pathlib import Path
+from typing import Any, Sequence
 
 import pandas as pd
 
-from typing import Any
-from pathlib import Path
+from config import DATA_DIR
 
 def parse_csv(file_path: Path) -> list[dict[str, Any]]:
-    """Parse a CSV file and return its contents as a list of dictionaries."""
+    """Parse a CSV file and return its contents as a list of dictionaries.
+
+    Args:
+        file_path (Path): Path to the CSV file to parse.
+
+    Returns:
+        list[dict[str, Any]]: Rows from the CSV file keyed by column name.
+    """
     with file_path.open("r", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         return list(reader)
 
 def parse_json(file_path: Path) -> dict[str, Any]:
-    """Parse a JSON file and return its contents as a dictionary."""
+    """Parse a JSON file and return its contents as a dictionary.
+
+    Args:
+        file_path (Path): Path to the JSON file to parse.
+
+    Returns:
+        dict[str, Any]: Parsed JSON object.
+    """
     with file_path.open("r", encoding="utf-8-sig") as f:
         return json.load(f)
 
 def parse_txt(file_path: Path) -> str:
-    """Parse a TXT file and return its contents as a string."""
+    """Parse a text file and return its contents as a string.
+
+    Args:
+        file_path (Path): Path to the text file to parse.
+
+    Returns:
+        str: File contents as a string.
+    """
     with file_path.open("r", encoding="utf-8-sig") as f:
         return f.read()
+    
+def get_timestamp_column(df):
+    """Identify the timestamp column in a DataFrame."""
 
-def normalize_part_ids(part_ids):
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError(f"Expected DataFrame, got {type(df)}")
+
+    for col in ["dateTime", "Date", "date", "timestamp", "time"]:
+        if col in df.columns:
+            return col
+
+    raise KeyError(
+        f"No timestamp column found. Available columns: {list(df.columns)}"
+    )
+
+def normalize_part_ids(part_ids: int | str | Sequence[int | str]) -> list[int | str]:
+    """Normalize participant identifiers into a list.
+
+    Args:
+        part_ids (int | str | Sequence[int | str]): A single participant ID or a sequence of IDs.
+
+    Returns:
+        list[int | str]: A list containing the normalized participant IDs.
+    """
+    path = Path(DATA_DIR)
     if isinstance(part_ids, (int, str)):
-        return [part_ids]
-    return list(part_ids)
+        part_ids = [part_ids]
 
-def parse_dates(text):
-    """Parse dates from a given text and return them as a list of datetime objects."""
+    available_pt_ids: list[int] = []
+
+    for item in path.iterdir():
+        m = re.match(r"^ST(\d+)", item.name)
+        if m:
+            available_pt_ids.append(int(m.group(1)))
+
+    part_ids_final = []
+    for pt_id in part_ids:
+        if pt_id in available_pt_ids:
+            part_ids_final.append(pt_id)
+        else:
+            logging.warning(f"Participant ID {pt_id} not found in data directory.")
+    return list(part_ids_final)
+
+def parse_dates(text: Any) -> list[Any] | None:
+    """Parse date strings from a value and return the parsed datetime objects.
+
+    Args:
+        text (Any): A scalar or text value containing one or more dates.
+
+    Returns:
+        list[Any] | None: Parsed date values or ranges, or None when no dates can be parsed.
+    """
     date_pat = r"\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}:\d{2})?"
     pattern = rf"({date_pat})\s*(?:tm|t\s*/\s*m)\s*({date_pat})|({date_pat})"
     if pd.isna(text):
         return None
 
-    result = []
+    result: list[Any] = []
 
     for m in re.finditer(pattern, str(text), flags=re.IGNORECASE):
-        if m.group(1):  # range
+        if m.group(1):
             result.append([
                 pd.to_datetime(m.group(1)),
                 pd.to_datetime(m.group(2))
             ])
-        else:  # single date
+        else:
             if isinstance(text, pd.Timestamp):
                 result.append(text)
             else:
-                result.append(
-                    pd.to_datetime(m.group(3))
-                )
+                result.append(pd.to_datetime(m.group(3)))
 
     if not result:
         return None
     return result
 
-def align_metric_against_ref(metric_df, value_date, value_col, ref_df, ref_date, ref_col):
-        aligned_df = (
-            metric_df[[value_date, value_col]]
-            .assign(dateTime=lambda df: pd.to_datetime(df[value_date]))
-            .merge(
-                ref_df[[ref_date, ref_col]]
-                .assign(dateTime=lambda df: pd.to_datetime(df[ref_date]))[["dateTime", ref_col]]
-                .dropna()
-                .drop_duplicates(subset="dateTime"),
-                on="dateTime",
-                how="inner",
-            )
-            .sort_values("dateTime")
-        )
-        return aligned_df
+def align_metric_against_ref(
+    metric_df: pd.DataFrame,
+    value_date: str,
+    value_col: str,
+    ref_df: pd.DataFrame,
+    ref_date: str,
+    ref_col: str,
+) -> pd.DataFrame:
+    """Align one metric DataFrame to a reference DataFrame using a common datetime column.
 
-def get_moving_mean_valid(data: pd.DataFrame, windows: list[int]) -> dict[int, pd.Series]:
-    """Return rolling means for each window, while allowing at most one invalid day.
+    Args:
+        metric_df (pd.DataFrame): DataFrame containing the metric values.
+        value_date (str): Column name for the metric timestamps.
+        value_col (str): Column name for the metric values.
+        ref_df (pd.DataFrame): Reference DataFrame used to align the metric against.
+        ref_date (str): Column name for the reference timestamps.
+        ref_col (str): Column name for the reference values.
 
-    The input may be a DataFrame with a ``date``/``dateTime`` column and a numeric
-    value column (such as ``cadence`` or ``rmssd``), or a Series. For a Series,
-    the index is treated as the date axis when it is datetime-like.
+    Returns:
+        pd.DataFrame: Metric rows aligned by datetime to the reference data.
     """
-    if isinstance(windows, int):
-        windows = [windows]
-    else:
-        windows = list(windows)
+    aligned_df = (
+        metric_df[[value_date, value_col]]
+        .assign(dateTime=lambda df: pd.to_datetime(df[value_date]))
+        .merge(
+            ref_df[[ref_date, ref_col]]
+            .assign(dateTime=lambda df: pd.to_datetime(df[ref_date]))[["dateTime", ref_col]]
+            .dropna()
+            .drop_duplicates(subset="dateTime"),
+            on="dateTime",
+            how="inner",
+        )
+        .sort_values("dateTime")
+    )
+    return aligned_df
 
-    if isinstance(data, pd.Series):
-        series = data.copy()
-        value_name = series.name if series.name not in {None, "date", "dateTime"} else "value"
-        if isinstance(series.index, pd.DatetimeIndex):
-            data = pd.DataFrame({"date": series.index, value_name: series.to_numpy()})
-        else:
-            data = pd.DataFrame({"date": pd.to_datetime(series.index, errors="coerce"), value_name: series.to_numpy()})
-    else:
-        data = data.copy()
-
-    if data.empty:
-        return {window: pd.Series(dtype=float) for window in windows}
-
-    if "date" not in data.columns:
-        if "dateTime" in data.columns:
-            data["date"] = pd.to_datetime(data["dateTime"], errors="coerce")
-        elif isinstance(data.index, pd.DatetimeIndex):
-            data["date"] = data.index
-        else:
-            data["date"] = pd.to_datetime(data.index, errors="coerce")
-
-    if "cadence" in data.columns:
-        value_col = "cadence"
-    elif "rmssd" in data.columns:
-        value_col = "rmssd"
-    elif "value" in data.columns:
-        value_col = "value"
-    else:
-        value_cols = [c for c in data.columns if c not in {"date", "dateTime", "zone"}]
-        if not value_cols:
-            raise ValueError("No numeric value column found for moving mean computation")
-        value_col = value_cols[0]
-
-    data = data[["date", value_col, *(["zone"] if "zone" in data.columns else [])]].copy()
-    data = data.sort_values("date").reset_index(drop=True)
-
-    if "zone" in data.columns:
-        grouped = []
-        for _, zone_df in data.groupby("zone", sort=False):
-            zone_df = zone_df.sort_values("date").reset_index(drop=True)
-            valid_series = zone_df[value_col].notna()
-            zone_output = []
-            for window in windows:
-                rolling = zone_df[value_col].rolling(window=window, min_periods=1).mean()
-                invalid_days = (~valid_series).rolling(window=window, min_periods=1).sum()
-                zone_output.append(rolling.where(invalid_days <= 1))
-            grouped.append(pd.concat(zone_output, axis=1, keys=windows))
-        result = {}
-        for window in windows:
-            result[window] = pd.concat([g[window] for g in grouped], axis=0)
-        return result
-
-    valid_series = data[value_col].notna()
-    result = {}
-    for window in windows:
-        rolling = data[value_col].rolling(window=window, min_periods=1).mean()
-        invalid_days = (~valid_series).rolling(window=window, min_periods=1).sum()
-        result[window] = rolling.where(invalid_days <= 1)
-    return result

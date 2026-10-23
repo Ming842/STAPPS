@@ -34,7 +34,8 @@ plots/
 Plots/
 
 figures/
-FIgures/
+Figures/
+scripts/config2.py
 # Node
 node_modules/
 .npm/
