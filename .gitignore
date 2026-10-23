@@ -33,6 +33,8 @@ data/
 plots/
 Plots/
 
+figures/
+FIgures/
 # Node
 node_modules/
 .npm/
