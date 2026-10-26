@@ -2,7 +2,7 @@
 import logging
 
 DEBUG = False
-LOC = "Work"
+LOC = "Home"
 
 if LOC == "Work":
     DATA_DIR = r"\\storage.erasmusmc.nl\v\vcl02\ONCO\Data\01 Onderzoeksbestanden\STAPPS\STAPPS_Main\STAPPS\Data"
@@ -32,5 +32,4 @@ logging.basicConfig(
         "%(filename)s:%(lineno)d | "
         "%(funcName)s | "
         "%(message)s"
-    )
-)
+    ))

@@ -158,7 +158,7 @@ def mixed_effects_model(data: pd.DataFrame):
 
 if __name__ == "__main__":
     pat_ids = list(range(1, 31))
-    pat_ids, data = load_plot_data(pat_ids, data_types=("steps", "cycles")) 
+    pat_ids, data = load_plot_data(pat_ids, data_types=("steps", "cycles"))
     data = add_side_effect_column(pat_ids, data)
 
     before_after_chemo_data = get_before_and_after_chemo(data)
