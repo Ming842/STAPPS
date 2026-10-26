@@ -8,8 +8,12 @@ import pandas as pd
 from matplotlib.colors import LinearSegmentedColormap
 
 from loaders import ParticipantDataLoader
-from parsers import align_metric_against_ref, get_moving_mean_valid, normalize_part_ids
-from preprocessing import Preprocessor, load_plot_data, merge_cadence_with_hr
+from parsers import (align_metric_against_ref,
+                    normalize_part_ids)
+from preprocessing import (Preprocessor,
+                           load_plot_data,
+                           get_moving_mean_valid,
+                           get_smoothed_cadence_by_zone)
 
 
 def _plot_event_periods(
@@ -360,8 +364,13 @@ def plot_steps_moving_average(ax: plt.Axes, steps_data: pd.DataFrame, windows: l
                 **style_for_plot
             )
         else:
-            logging.warning(f"Column '{col}' not found in steps_data. Skipping moving average plot for window {window}."
-                            f"available mov_averages: {steps_data.columns.str.contains('daily_steps_ma')}")
+            logging.warning(
+                "Column '%s' not found in steps_data. Skipping moving average plot for window %s. "
+                "available mov_averages: %s",
+                col,
+                window,
+                steps_data.columns.str.contains("daily_steps_ma"),
+            )
 
     ax.set_ylabel("Steps")
 
@@ -409,16 +418,23 @@ def plot_hr_zones(ax: plt.Axes, part_heart_data: pd.DataFrame, zone_thresholds: 
 
     return ax_zone
 
-def plot_hr_cadence(ax: plt.Axes, data_merge: pd.DataFrame, window_size: int, zones_to_omit: tuple[int, ...] = (1, 4, 5), cmap: Any = None, style: dict[str, Any] | None = None) -> None:
+def plot_hr_cadence(
+    ax: plt.Axes,
+    data_merge: pd.DataFrame,
+    window_size: int,
+    zones_to_omit: tuple[int, ...] = (1, 4, 5),
+    cmap: Any = None,
+    style: dict[str, Any] | None = None,
+) -> None:
     """Plot median cadence by heart-rate zone, smoothed over time.
 
     Args:
-        ax (plt.Axes): Axis to draw the cadence traces on.
-        data_merge (pd.DataFrame): Merged heart-rate and cadence data.
-        window_size (int): Moving-average window used for the cadence smoothing.
-        zones_to_omit (tuple[int, ...]): Zone numbers to skip from plotting. Defaults to (1, 4, 5).
-        cmap (Any): Colormap for per-zone line colors. Defaults to None.
-        style (dict[str, Any] | None): Matplotlib style arguments for each line. Defaults to None.
+        ax: Axis to draw the cadence traces on.
+        data_merge: Merged heart-rate and cadence data.
+        window_size: Moving-average window used for cadence smoothing.
+        zones_to_omit: Zone numbers to skip. Defaults to (1, 4, 5).
+        cmap: Colormap for per-zone line colors.
+        style: Matplotlib style arguments for each line.
 
     Returns:
         None: Draws all cadence lines on the axis.
@@ -440,44 +456,37 @@ def plot_hr_cadence(ax: plt.Axes, data_merge: pd.DataFrame, window_size: int, zo
                 (0.1, "#33ff00"),
                 (0.3, "#C96100"),
                 (1.0, "#570014"),
-            ]
+            ],
         )
 
-    data_merge["date"] = pd.to_datetime(data_merge["dateTime"], errors="coerce").dt.date
-    median_cadence_by_zone = (
-        data_merge.groupby(["date", "zone"])["cadence"]
-        .median()
-        .reset_index()
+    data_merge = data_merge.copy()
+    smoothed_cadence_by_zone = get_smoothed_cadence_by_zone(
+        data_merge,
+        window_size,
     )
-    median_cadence_by_zone = median_cadence_by_zone.sort_values(["zone", "date"])
 
-    smoothed_frames = []
-    for _, group in median_cadence_by_zone.groupby("zone", sort=False):
-        group = group.sort_values("date").reset_index(drop=True)
-        group = group.drop_duplicates(subset="date", keep="last")
-        smoothed = get_moving_mean_valid(group[["date", "cadence"]], [window_size])[window_size]
-        if hasattr(smoothed, "to_numpy"):
-            group["cadence"] = smoothed.to_numpy()
-        else:
-            group["cadence"] = smoothed
-        smoothed_frames.append(group)
+    n_zones = smoothed_cadence_by_zone["zone"].nunique()
 
-    median_cadence_by_zone = pd.concat(smoothed_frames, ignore_index=True)
-
-    for i, (zone, group) in enumerate(median_cadence_by_zone.groupby("zone")):
-        zone_number = pd.to_numeric(str(zone).replace("zone", ""), errors="coerce")
+    for i, (zone, group) in enumerate(
+        smoothed_cadence_by_zone.groupby("zone")
+    ):
+        zone_number = pd.to_numeric(
+            str(zone).replace("zone", ""),
+            errors="coerce",
+        )
         if pd.notna(zone_number) and zone_number in zones_to_omit:
             continue
 
-        zone_series = group.sort_values("date").drop_duplicates(subset="date", keep="last").set_index("date")["cadence"]
-        if zone_series.empty:
-            continue
+        group = group.sort_values("date")
+        frac = i / max(1, n_zones - 1)
 
-        full_index = pd.date_range(zone_series.index.min(), zone_series.index.max(), freq="D")
-        zone_series = zone_series.reindex(full_index)
-
-        frac = i / max(1, len(median_cadence_by_zone["zone"].unique()) - 1)
-        ax.plot(zone_series.index, zone_series.values, label=f"{window_size}-day mov avg: {zone}", color=cmap(frac), **style)
+        ax.plot(
+            group["date"],
+            group["cadence"],
+            label=f"{window_size}-day mov avg: {zone}",
+            color=cmap(frac),
+            **style,
+        )
 
 def plot_hr_over_time(ax: plt.Axes, hr_data: pd.DataFrame, label: str, style: dict[str, Any] | None = None) -> None:
     """Plot heart-rate values over time for a participant.

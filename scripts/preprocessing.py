@@ -4,7 +4,8 @@ from typing import Any
 
 import pandas as pd
 import numpy as np
-
+from tqdm import tqdm
+from tqdm.contrib.logging import logging_redirect_tqdm
 from config import DATA_DIR
 from loaders import ParticipantDataLoader
 from parsers import normalize_part_ids, get_timestamp_column
@@ -277,7 +278,7 @@ class Preprocessor:
         parser = parser_map.get(data_type)
 
         for parent_path, files in self.loader.find_paths(data_type):
-            for participant_id in participant_ids:
+            for participant_id in tqdm(participant_ids, desc=f"Processing {data_type}"):
                 paths = self.participant_loader.make_file_paths(
                     participant_id,
                     parent_path,
@@ -707,7 +708,7 @@ def add_side_effect_column(part_id: int | list[int], data: dict[pd.DataFrame]) -
             "dose_changed_for_cycle": (side_effect_mask
                                        .groupby("participant_id")["Dose_Modifications"]
                                        .apply(list)
-                                       .apply(_get_chemo_cycle))
+                                       .apply(_get_chemo_cycle)),
         })
         side_effect_data["cycle_dates"] = side_effect_data.apply(
             lambda row: _cycle_to_date(row["dose_changed_for_cycle"], cycle_data, row["participant_id"]),
@@ -808,6 +809,81 @@ def get_moving_mean_valid(
         result[window] = rolling.where(invalid_days <= 1)
     return result
 
+def get_median_cadence_by_zone(data_merge: pd.DataFrame) -> pd.DataFrame:
+    """Calculate the median cadence for each heart-rate zone per day.
+
+    Args:
+        data_merge (pd.DataFrame): Merged heart-rate and cadence data.
+
+    Returns:
+        pd.DataFrame: DataFrame containing median cadence values grouped by date and zone.
+    """
+    data_merge = data_merge.copy()
+    data_merge["date"] = pd.to_datetime(data_merge["dateTime"], errors="coerce").dt.normalize()
+
+    median_cadence_by_zone = (
+        data_merge.groupby(["date", "zone"])["cadence"]
+        .median()
+        .reset_index()
+        .sort_values(["zone", "date"])
+    )
+
+    return median_cadence_by_zone
+
+def get_smoothed_cadence_by_zone(
+    data_merge: pd.DataFrame,
+    window_size: int,
+) -> pd.DataFrame:
+    """Smooth cadence per zone and add missing dates as empty daily rows.
+    
+    Args:
+        data_merge (pd.DataFrame): Merged heart-rate and cadence data.
+        window_size (int): Window size for moving mean smoothing.
+    
+    Returns:
+        pd.DataFrame: DataFrame with smoothed cadence values.
+    """
+    frames = []
+    median_cadence_by_zone = get_median_cadence_by_zone(data_merge)
+    for zone, group in median_cadence_by_zone.groupby("zone", sort=False):
+        group = (
+            group.sort_values("date")
+            .drop_duplicates(subset="date", keep="last")
+            .reset_index(drop=True)
+            .copy()
+        )
+
+        smoothed = get_moving_mean_valid(
+            group[["date", "cadence"]],
+            [window_size],
+        )[window_size]
+
+        group["cadence"] = (
+            smoothed.to_numpy()
+            if hasattr(smoothed, "to_numpy")
+            else smoothed
+        )
+
+        full_index = pd.date_range(
+            group["date"].min(),
+            group["date"].max(),
+            freq="D",
+        )
+
+        group = (
+            group.set_index("date")
+            .reindex(full_index)
+            .rename_axis("date")
+            .reset_index()
+        )
+        group["zone"] = zone
+        frames.append(group)
+
+    if not frames:
+        return median_cadence_by_zone.iloc[:0].copy()
+
+    return pd.concat(frames, ignore_index=True)
+
 def get_baseline_data(
     data: pd.DataFrame,
     date_col: str,
@@ -866,7 +942,7 @@ def get_baseline_data(
         raise ValueError("No baseline data available before the calculated end date.")
     return baseline
 
-def get_before_and_after_chemo(data): 
+def get_before_and_after_chemo(data, no_ae_only=True):
     """Add numeric chemo timing columns per record.
 
     Adds:
@@ -875,6 +951,7 @@ def get_before_and_after_chemo(data):
 
     Args:
         data (dict[str, pd.DataFrame]): Dictionary containing participant datatypes and cycle data.
+        no_ae_only (bool): If True, only include participants with side effects in the calculations.
     
     Returns:
         dict[str, pd.DataFrame]: Updated data dictionary with chemo timing columns added to each dataset
@@ -883,62 +960,68 @@ def get_before_and_after_chemo(data):
     cycle_data = data.get("cycles")
     if cycle_data is None:
         raise ValueError("The data dictionary must include a 'cycles' DataFrame.")
-    dict_no_ae = {}
+    dict_filtered = {}
     for key in data.keys():
-        if key == "cycles":
+        if key == "cycles" or key == "hr":
             continue
 
-        df = data[key].copy()
-        df_no_ae = df[df["side_effect"] != True]
+        if no_ae_only:
+            df = data[key].copy()
+            df_filtered = df[~df["side_effect"]]
+        else:
+            df_filtered = data[key].copy()
+        time_col = get_timestamp_column(df_filtered)
+        df_filtered[time_col] = pd.to_datetime(df_filtered[time_col], errors="coerce")
 
-        time_col = get_timestamp_column(df_no_ae) 
-        df_no_ae[time_col] = pd.to_datetime(df_no_ae[time_col], errors="coerce")
+        df_filtered["days_after_chemo"] = 0
 
-        df_no_ae["before_after_chemo"] = pd.NA
-        df_no_ae["days_before_chemo"] = 0
-        df_no_ae["days_after_chemo"] = 0
-        part_ids = list(df_no_ae["participant_id"].dropna().unique())
-        for part_id in part_ids:
-            part_cycle_data = cycle_data[cycle_data["participant_id"] == part_id].copy()
-            part_cycle_data["Date"] = pd.to_datetime(part_cycle_data["Date"], errors="coerce")
-            
-            c1_date = part_cycle_data["Date"][part_cycle_data["Period"] == "C1"]
-            if c1_date.empty:
-                logging.warning(f"No C1 date found for participant {part_id}. Skipping chemo timing calculations.")
-                part_ids.remove(part_id)
-                continue
-            else:
-                c1_date = c1_date.item().normalize()  # Normalize to remove time component
+        part_ids = list(df_filtered["participant_id"].dropna().unique())
 
-            c2_date = part_cycle_data["Date"][part_cycle_data["Period"] == "C2"]
-            if c2_date.empty:
-                logging.warning(f"No C2 date found for participant {part_id}. Using last datapoint")
-                c2_date = df_no_ae[time_col][df_no_ae["participant_id"] == part_id].max().normalize()  # Normalize to remove time component
-            else:
-                c2_date = c2_date.item().normalize() # Normalize to remove time component       
-            mask = df_no_ae["participant_id"] == part_id
 
-            for idx in df_no_ae.index[mask]:
-                timestamp = df_no_ae.at[idx, time_col]
-                if pd.isna(timestamp):
-                    df_no_ae.at[idx, "days_after_chemo"] = pd.NA
+        with logging_redirect_tqdm():
+            for part_id in tqdm(
+                                part_ids.copy(),
+                                desc=f"Chemo timing: {key}",
+                                unit="participant",
+                                dynamic_ncols=True,
+                                leave=True,
+                            ):
+                part_cycle_data = cycle_data[cycle_data["participant_id"] == part_id].copy()
+                part_cycle_data["Date"] = pd.to_datetime(part_cycle_data["Date"], format = "%Y-%m-%d %H:%M:%S", errors="coerce")
+                
+                c1_date = part_cycle_data["Date"][part_cycle_data["Period"] == "C1"]
+                if c1_date.empty:
+                    logging.warning("No C1 date found for participant %s. Skipping chemo timing calculations.", part_id)
+                    part_ids.remove(part_id)
                     continue
-
-
-                if timestamp == c1_date:
-                    df_no_ae.at[idx, "days_after_chemo"] = 0
-                elif timestamp > c2_date:
-                    df_no_ae.at[idx, "days_after_chemo"] = 1000
                 else:
-                    df_no_ae.at[idx, "days_after_chemo"] = (timestamp - c1_date).days
+                    c1_date = c1_date.item().normalize()  # Normalize to remove time component
 
+                c2_date = part_cycle_data["Date"][part_cycle_data["Period"] == "C2"]
+                if c2_date.empty:
+                    logging.warning("No C2 date found for participant %s. Using last datapoint", part_id)
+                    c2_date = df_filtered[time_col][df_filtered["participant_id"] == part_id].max().normalize()  # Normalize to remove time component
+                else:
+                    c2_date = c2_date.item().normalize() # Normalize to remove time component
+                mask = df_filtered["participant_id"] == part_id
 
+                for idx in df_filtered.index[mask]:
+                    timestamp = df_filtered.at[idx, time_col]
+                    if pd.isna(timestamp):
+                        df_filtered.at[idx, "days_after_chemo"] = pd.NA
+                        continue
 
+                    if timestamp == c1_date:
+                        df_filtered.at[idx, "days_after_chemo"] = 0
+                    elif timestamp > c2_date:
+                        df_filtered.at[idx, "days_after_chemo"] = 1000
+                    else:
+                        df_filtered.at[idx, "days_after_chemo"] = (timestamp - c1_date).days
 
-        df_no_ae = df_no_ae[df_no_ae["days_after_chemo"] != 1000]
-        df_no_ae = df_no_ae[df_no_ae["participant_id"].isin(part_ids)]
-        dict_no_ae[key] = df_no_ae
-    return dict_no_ae
+        df_filtered = df_filtered[df_filtered["days_after_chemo"] != 1000]
+        df_filtered = df_filtered[df_filtered["participant_id"].isin(part_ids)]
+        dict_filtered[key] = df_filtered
+    return dict_filtered
 
 
 if __name__ == "__main__":

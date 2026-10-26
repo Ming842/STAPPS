@@ -4,6 +4,7 @@ import os
 import re
 from pathlib import Path
 from typing import Any
+from tqdm import tqdm
 
 import msoffcrypto
 import pandas as pd
@@ -106,10 +107,11 @@ class ParticipantDataLoader:
             dict[str, Any]: Matching file paths for the requested data type.
         """
         if participant_id not in self.pat_ids:
-            logging.warning(f"Participant ID {participant_id} not found in data directory.")
+            logging.warning("Participant ID %s not found in data directory.", participant_id)
             return None
         if len(dtype) == 0:
             raise ValueError(f"Data type must be specified.\n Choose from: {dtype}")
+        
 
         index = self.pat_ids.index(participant_id)
         participant_dir = self.pat_dirs[index]
@@ -223,6 +225,52 @@ class ParticipantDataLoader:
 
         return data
 
+def write_to_pickle(data: dict[str, pd.DataFrame], data_dir: str | Path = DATA_DIR) -> None:
+    """Write the given DataFrame to a pickle file in the specified data directory.
+
+    Args:
+        data (dict[str, pd.DataFrame]): Dictionary of DataFrames to be saved.
+        data_dir (str | Path): Directory where the pickle file will be saved.
+
+    Returns:
+        None
+    """
+    for key in tqdm(data.keys(), desc="Saving data to pickle files"):
+        pickle_path = Path(data_dir) / f"{key}.pkl"
+        data[key].to_pickle(pickle_path)
+        logging.info("Data for %s saved to %s", key, pickle_path)
+
+def load_from_pickle(data_keys: list[str], data_dir: str | Path = DATA_DIR) -> dict[str, pd.DataFrame]:
+    """Load DataFrames from pickle files in the specified data directory.
+
+    Args:
+        data_keys (list[str]): List of keys for the DataFrames to be loaded.
+        data_dir (str | Path): Directory where the pickle files are located.
+
+    Returns:  
+        dict[str, pd.DataFrame]: Dictionary of loaded DataFrames.
+    """
+    available_data_keys = [f.stem for f in Path(data_dir).glob("*.pkl")]
+    if data_keys is None:
+        logging.warning("No data keys provided. using all keys from the data directory."
+        )
+        data_keys = available_data_keys
+    else:
+        missing_keys = [key for key in data_keys if key not in available_data_keys]
+        if missing_keys:
+            logging.warning(
+                "The following data keys are not found in the data directory: %s",
+                missing_keys,
+            )
+    data = {}
+    for key in data_keys:
+        pickle_file = Path(data_dir) / f"{key}.pkl"
+        if pickle_file.exists():
+            data[key] = pd.read_pickle(pickle_file)
+            logging.info("Data for %s loaded from %s", key, pickle_file)
+        else:
+            logging.warning("Pickle file for %s not found in %s", key, data_dir)
+    return data
 
 if __name__ == "__main__":
     loader = StructureDataLoader()

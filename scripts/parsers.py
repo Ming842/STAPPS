@@ -48,13 +48,18 @@ def parse_txt(file_path: Path) -> str:
     with file_path.open("r", encoding="utf-8-sig") as f:
         return f.read()
     
-def get_timestamp_column(df):
+def get_timestamp_column(df, day=False):
     """Identify the timestamp column in a DataFrame."""
 
     if not isinstance(df, pd.DataFrame):
         raise TypeError(f"Expected DataFrame, got {type(df)}")
 
-    for col in ["dateTime", "Date", "date", "timestamp", "time"]:
+    if day:
+        for col in ["date", "Date"]:
+            if col in df.columns:
+                return col
+
+    for col in ["dateTime", "timestamp", "time", "Date", "date"]:
         if col in df.columns:
             return col
 
@@ -87,7 +92,7 @@ def normalize_part_ids(part_ids: int | str | Sequence[int | str]) -> list[int | 
         if pt_id in available_pt_ids:
             part_ids_final.append(pt_id)
         else:
-            logging.warning(f"Participant ID {pt_id} not found in data directory.")
+            logging.warning("Participant ID %s not found in data directory.", pt_id)
     return list(part_ids_final)
 
 def parse_dates(text: Any) -> list[Any] | None:
