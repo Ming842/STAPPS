@@ -2,7 +2,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 import logging
+import statsmodels.formula.api as smf
 
+from math import log
 from tqdm import tqdm
 from config import DATA_DIR
 from pathlib import Path
@@ -13,10 +15,9 @@ from preprocessing import (load_plot_data,
                            add_side_effect_column,
                            get_before_and_after_chemo,
                            get_baseline_data,
-                           merge_cadence_with_hr,
+                           get_baseline_stats,
                            get_smoothed_cadence_by_zone)
-import statsmodels.formula.api as smf
-
+from lifelines import CoxTimeVaryingFitter
 def z_score(series: pd.Series) -> pd.Series:
     """Calculate the z-score of a pandas Series.
 
@@ -290,19 +291,43 @@ def prepare_cox_model_data(
     data: dict[str, pd.DataFrame],
     data_type: str,
     cycle_data: pd.DataFrame,
+    per_value: int = 1,
+    ratios: bool = False,
+    event_column: str = "hospitalization",
     value_column: str | None = None,
     aggregation: str | Callable | None = None,
+    max_interpolation_gap_days: int | None = 7,
+    recent_value_shift: int = 1,
+    recent_value_window: int = 3,
+    recent_value_min_periods: int = 1,
+    recent_value_aggregation: str = "median",
 ) -> pd.DataFrame:
+    #pylint: disable=too-many-locals,too-many-statements
     """Prepare data for a Cox proportional hazards model.
 
     Args:
         data: Mapping of data type names to data frames.
         data_type: Key in ``data`` identifying the metric to prepare.
+        cycle_data: Data frame containing cycle information.
+        per_value: Devide the value by this number to get 1000 steps/day for example. Defaults to 1 (no change).
+        ratios: If True, calculate ratios instead of absolute values. Defaults to False.
+        event_column: Column name for the event of interest. Defaults to
+            ``"hospitalization"``.
         value_column: Measurement column. Defaults to ``value`` for steps and
             resting heart rate, ``rmssd`` for HRV, and ``bpm`` for heart rate.
         aggregation: Aggregation used when multiple records occur on one
             participant-day. Defaults to ``"sum"`` for steps and ``"mean"``
             for other metrics.
+        max_interpolation_gap_days: Maximum number of days between the closest
+            measurements surrounding a missing event date. Use ``None`` for no
+            maximum.
+        recent_value_shift: Number of observations to shift before calculating
+            the recent-value rolling statistic.
+        recent_value_window: Number of observations in the rolling window.
+        recent_value_min_periods: Minimum number of observations required in a
+            rolling window.
+        recent_value_aggregation: Statistic used for recent values. Must be ``"median"``
+            or ``"mean"``.
 
     Returns:
         A daily data frame containing ``participant_id``, ``date``, ``value``,
@@ -324,9 +349,23 @@ def prepare_cox_model_data(
     if data_type not in data:
         raise ValueError(f"Data does not contain the metric {data_type!r}.")
 
+    if max_interpolation_gap_days is not None and max_interpolation_gap_days < 0:
+        raise ValueError("max_interpolation_gap_days must be non-negative or None.")
+    if recent_value_shift < 0:
+        raise ValueError("recent_value_shift must be non-negative.")
+    if recent_value_window <= 0:
+        raise ValueError("recent_value_window must be positive.")
+    if not 0 <= recent_value_min_periods <= recent_value_window:
+        raise ValueError(
+            "recent_value_min_periods must be between 0 and recent_value_window."
+        )
+    if recent_value_aggregation not in {"median", "mean"}:
+        raise ValueError("recent_value_aggregation must be 'median' or 'mean'.")
+
     metric = data[data_type].copy()
     value_column = value_column or default_value_columns.get(data_type, "value")
     aggregation = aggregation or default_aggregations.get(data_type, "median")
+
     required_columns = {"participant_id",
                         "hospitalization_dates", 
                         "ed_visits_dates", 
@@ -337,6 +376,9 @@ def prepare_cox_model_data(
         raise ValueError(
             f"{data_type!r} data is missing required columns: {sorted(missing_columns)}."
         )
+
+    baseline_stats = get_baseline_stats(data, cycle_data, DATA_TYPE, aggregation)
+
     metric_timestamp = get_timestamp_column(metric)
     date_source = metric[metric_timestamp]
 
@@ -363,13 +405,27 @@ def prepare_cox_model_data(
     daily["chemo_cycle"] = False
 
     for pat_id, patient_data in metric.groupby("participant_id"):
+
+        #PT data for this participant
         patient_mask = daily["participant_id"].eq(pat_id)
         patient_dates = daily.loc[patient_mask, "date"]
+        patient_values = (
+            daily.loc[patient_mask, ["date", "value"]]
+            .dropna(subset=["date"])
+            .sort_values("date")
+        )
+
+        #Cylce data for this participant
         cycle_data_patient = cycle_data[cycle_data["participant_id"] == pat_id].copy()
         cycle_dates = cycle_data_patient["Date"].dropna().unique()
         cycle_dates = pd.to_datetime(cycle_dates, errors="coerce").normalize()
-        daily.loc[patient_mask, "chemo_cycle"] = patient_dates.isin(cycle_dates)
+
+        event_dates_by_flag = {}
+        missing_event_dates = set()
+
+        # Process events for this participant
         for flag, date_column in event_columns.items():
+            # Extract and normalize the event dates for this participant
             raw_dates = (
                 patient_data[date_column]
                 .explode()
@@ -399,7 +455,50 @@ def prepare_cox_model_data(
                 event_dates = event_dates.fillna(fallback_date)
 
             event_dates = event_dates.dt.normalize().dropna().unique()
+            event_dates_by_flag[flag] = event_dates
+            missing_event_dates.update(
+                set(event_dates) - set(patient_dates.dropna())
+            )
 
+        # Add event dates absent from the measurements. Their values are
+        # linearly interpolated from the closest measurements on either side.
+        if missing_event_dates:
+            interpolated_rows = []
+
+            for event_date in sorted(missing_event_dates):
+                before = patient_values[patient_values["date"] < event_date].iloc[-1:]
+                after = patient_values[patient_values["date"] > event_date].iloc[:1]
+                value = np.nan
+
+                if not before.empty and not after.empty:
+                    before_date = before.iloc[0]["date"]
+                    after_date = after.iloc[0]["date"]
+                    gap_days = (after_date - before_date).days
+
+                    if (
+                        max_interpolation_gap_days is None
+                        or gap_days <= max_interpolation_gap_days
+                    ):
+                        before_value = before.iloc[0]["value"]
+                        after_value = after.iloc[0]["value"]
+                        if pd.notna(before_value) and pd.notna(after_value):
+                            fraction = (
+                                (event_date - before_date).total_seconds()
+                                / (after_date - before_date).total_seconds()
+                            )
+                            value = before_value + fraction * (after_value - before_value)
+
+                interpolated_rows.append(
+                    {"participant_id": pat_id, "date": event_date, "value": value}
+                )
+
+            daily = pd.concat([daily, pd.DataFrame(interpolated_rows)], ignore_index=True)
+            patient_mask = daily["participant_id"].eq(pat_id)
+            patient_dates = daily.loc[patient_mask, "date"]
+
+        daily.loc[patient_mask, "chemo_cycle"] = patient_dates.isin(cycle_dates)
+
+        for flag, event_dates in event_dates_by_flag.items():
             daily.loc[patient_mask, flag] = patient_dates.isin(event_dates)
 
     #make start and stop column for cox model
@@ -423,13 +522,51 @@ def prepare_cox_model_data(
     daily["stop"] = daily["start"] + 1
     daily = daily[daily["start"] >= 0].copy()
 
+    if ratios:
+        has_baseline = baseline_stats["participant_id"].unique()
+        daily = daily[daily["participant_id"].isin(has_baseline)].copy()
 
-    event_column = "hospitalization"
+        daily = daily.merge(
+            baseline_stats[["participant_id", "median"]],
+            on="participant_id",
+            how="left",
+            validate="many_to_one",
+        )
+
+        positive = (
+            daily["value"].gt(0)
+            & daily["median"].gt(0)
+        )
+
+        dropped = int((~positive).sum())
+        dropped_ids = (
+            daily.loc[~positive, "participant_id"].unique().tolist()
+        )
+
+        if dropped:
+            logging.warning(
+                "Dropping %d observations for participants %s because log "
+                "ratios require positive values and positive baselines.",
+                dropped,
+                dropped_ids,
+            )
+
+        daily = daily.loc[positive].copy()
+
+        daily["value"] = (
+            (
+                np.log(daily["value"])
+                - np.log(daily["median"])
+            )
+            * 100
+        )
 
     daily["value_recent"] = (
         daily.groupby("participant_id")["value"]
         .transform(
-            lambda x: x.shift(1).rolling(3, min_periods=1).median()
+            lambda x: x.shift(recent_value_shift)
+            .rolling(recent_value_window, min_periods=recent_value_min_periods)
+            .agg(recent_value_aggregation)
         )
     )
 
@@ -449,6 +586,11 @@ def prepare_cox_model_data(
     )
 
     cox_input["event"] = cox_input["event"].astype(int)
+    #adjust for log ratio's
+    if ratios:
+        per_value = 100 * np.log(1 + per_value)
+
+    cox_input["value_recent"] = cox_input["value_recent"] / per_value
 
     # Count events strictly BEFORE each interval.
     previous_events = (
@@ -465,62 +607,48 @@ def cox_model(
         data: dict[str, pd.DataFrame],
         data_type: str,
         cycle_data: pd.DataFrame,
+        per_value: int = 1,
+        ratios: bool = False,
+        event_column: str = "hospitalization",
         value_column: str | None = None,
-        aggregation: str | Callable | None = None,):
+        aggregation: str | Callable | None = None,
+        max_interpolation_gap_days: int = 7,
+        recent_value_window: int = 3,
+        recent_value_min_periods: int = 1,
+        recent_value_aggregation: str = "mean"):
     """Placeholder for future implementation of a Cox proportional hazards model."""
-
+    #pylint: disable=too-many-locals,too-many-statements
     df = prepare_cox_model_data(
-        data, data_type, cycle_data,value_column, aggregation
+        data,
+        data_type,
+        cycle_data,
+        per_value,
+        ratios = ratios,
+        event_column = event_column,
+        value_column = value_column,
+        aggregation = aggregation,
+        max_interpolation_gap_days = max_interpolation_gap_days,
+        recent_value_window = recent_value_window,
+        recent_value_min_periods = recent_value_min_periods,
+        recent_value_aggregation = recent_value_aggregation
+        )
+
+    
+    model = CoxTimeVaryingFitter()
+    df = df.dropna(subset=["value_recent"]).reset_index(drop=True)
+    model.fit(
+        df,
+        id_col="participant_id",
+        start_col="start",
+        stop_col="stop",
+        event_col="event",
+        formula="value_recent",
     )
+
+    model.print_summary()
     return df
 
 if __name__ == "__main__":
-    # pat_ids = list(range(1, 31))
-    # pat_ids, data = load_plot_data(pat_ids, data_types=("hr", "steps", "cycles"))
-    # data = add_side_effect_column(pat_ids, data)
-    # steps_data = data["steps"]
-    # hr_data = data["hr"]
-    # cycles = data["cycles"]
-
-    # hr_data_zoned, zone_thresholds = get_hr_zones(hr_data, cycles)
-    # smoothed_cadence_by_zone = []
-    # for pat_id in pat_ids:
-    #     patient_steps = steps_data.loc[
-    #         steps_data["participant_id"].eq(pat_id)
-    #     ]
-    #     patient_hr = hr_data_zoned.loc[
-    #         hr_data_zoned["participant_id"].eq(pat_id)
-    #     ]
-
-    #     data_merge = merge_cadence_with_hr(
-    #         patient_steps[["dateTime", "cadence"]], patient_hr
-    #     )
-    #     patient_smoothed = get_smoothed_cadence_by_zone(
-    #         data_merge, window_size=3
-    #     )
-    #     patient_smoothed["participant_id"] = pat_id
-    #     smoothed_cadence_by_zone.append(patient_smoothed)
-
-    # smoothed_cadence_by_zone = pd.concat(
-    #     smoothed_cadence_by_zone, ignore_index=True
-    # )
-    # smoothed_cadence_by_zone = smoothed_cadence_by_zone[
-    #     ["participant_id"]
-    #     + [
-    #         column
-    #         for column in smoothed_cadence_by_zone.columns
-    #         if column != "participant_id"
-    #     ]
-    # ]
-
-    # for zone in range(1, 6):
-    #     zone_name = f"zone{zone}"
-    #     column_name = f"smoothed_cadence_by_{zone_name}"
-    #     cadence_data = smoothed_cadence_by_zone[
-    #         smoothed_cadence_by_zone["zone"].eq(zone_name)
-    #     ]
-    #     cadence_data = cadence_data[["participant_id", "date", "cadence"]].copy()
-    #     data[column_name] = cadence_data
 
     data = load_from_pickle(data_keys=["rhr",
                                         "steps",
@@ -532,6 +660,11 @@ if __name__ == "__main__":
                                         "smoothed_cadence_by_zone5",
                                         "cycles"])
 
-
-    before_after_chemo_data = get_before_and_after_chemo(data, no_ae_only=False)
-    cox_input = cox_model(data, data_type="rhr", cycle_data=data["cycles"])
+    DATA_TYPE = "rhr"
+    cycle_data = data["cycles"]
+    cox_input = cox_model(data,
+                          ratios = True,
+                          per_value = 0.05,
+                          data_type=DATA_TYPE,
+                          event_column= "hospitalization",
+                          cycle_data=data["cycles"])

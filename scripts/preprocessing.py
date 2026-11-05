@@ -930,7 +930,7 @@ def get_baseline_data(
             end_baseline = pd.to_datetime(cycle_data.loc[cycle_data["Period"] == "C2", "Date"].iloc[0], errors="coerce")
             if pd.isna(end_baseline):
                 raise ValueError("C2 date could not be parsed as a valid datetime.")
-            logging.warning("Baseline period is less than 3 days; using 3 days before C2 as baseline period.") 
+            logging.warning("Baseline period is less than 3 days; using 3 days before C2 as baseline period.")
         else:
             end_baseline = pd.to_datetime(data[date_col].min()) + pd.Timedelta(days=3)
             if end_baseline > pd.to_datetime(data[date_col].max()):
@@ -1022,6 +1022,49 @@ def get_before_and_after_chemo(data, no_ae_only=True):
         df_filtered = df_filtered[df_filtered["participant_id"].isin(part_ids)]
         dict_filtered[key] = df_filtered
     return dict_filtered
+
+def get_baseline_stats(
+    data: dict[str, pd.DataFrame],
+    cycle_data: pd.DataFrame,
+    data_type: str,
+    daily_aggregation: str = "sum",
+) -> pd.DataFrame:
+    """Return participant-level baseline statistics."""
+
+    baseline_data = pd.DataFrame()
+
+    for pat_id in data[data_type]["participant_id"].unique():
+        pat_data = data[data_type][
+            data[data_type]["participant_id"] == pat_id
+        ]
+        pat_cycles = cycle_data[
+            cycle_data["participant_id"] == pat_id
+        ]
+
+        try:
+            date_column = get_timestamp_column(pat_data)
+            pat_baseline = get_baseline_data(
+                pat_data, date_column, pat_cycles
+            )
+            pat_baseline["date"] = pd.to_datetime(
+                pat_baseline[date_column], errors="coerce"
+            ).dt.normalize()
+
+            baseline_data = pd.concat(
+                [baseline_data, pat_baseline], ignore_index=True
+            )
+        except Exception as e:
+            logging.warning(
+                "Error processing participant %s: %s", pat_id, e
+            )
+
+    baseline_data = baseline_data.groupby(
+        ["participant_id", "date"], as_index=False
+    )["value"].agg(daily_aggregation)
+
+    return baseline_data.groupby(
+        "participant_id", as_index=False
+    )["value"].agg(["min", "mean", "median", "max"])
 
 
 if __name__ == "__main__":
