@@ -1028,9 +1028,19 @@ def get_baseline_stats(
     cycle_data: pd.DataFrame,
     data_type: str,
     daily_aggregation: str = "sum",
+    value_column: str = "value"
 ) -> pd.DataFrame:
-    """Return participant-level baseline statistics."""
-
+    """Return participant-level baseline statistics.
+    
+    Args:
+        data (dict[str, pd.DataFrame]): Dictionary containing participant datatypes and cycle data.
+        cycle_data (pd.DataFrame): DataFrame containing cycle information for participants.
+        data_type (str): The key in the data dictionary corresponding to the dataset for which to compute baseline statistics.
+        daily_aggregation (str): Aggregation method to apply to daily values before computing baseline statistics. Defaults to "sum". Options include "sum", "mean", "median", "min", and "max". 
+        value_column (str): The name of the column in the dataset to aggregate. Defaults to "value".
+    Returns:
+        pd.DataFrame: A DataFrame containing the baseline statistics for each participant.
+    """
     baseline_data = pd.DataFrame()
 
     for pat_id in data[data_type]["participant_id"].unique():
@@ -1060,15 +1070,15 @@ def get_baseline_stats(
 
     baseline_data = baseline_data.groupby(
         ["participant_id", "date"], as_index=False
-    )["value"].agg(daily_aggregation)
+    )[value_column].agg(daily_aggregation)
 
     return baseline_data.groupby(
         "participant_id", as_index=False
-    )["value"].agg(["min", "mean", "median", "max"])
+    )[value_column].agg(["min", "mean", "median", "max"])
 
 
 if __name__ == "__main__":
     pat_ids, data = load_plot_data([1,2,4,5,6,7,8,10,11,12,14], data_types=("steps", "hrv", "cycles"))
     data = add_side_effect_column([1,2,4,5,6,7,8,10,11,12,14], data)
-    
+
     print(data["steps"].head())

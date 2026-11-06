@@ -4,6 +4,8 @@ import numpy as np
 import logging
 import statsmodels.formula.api as smf
 
+from lifelines.exceptions import ConvergenceError
+from numpy.linalg import LinAlgError
 from math import log
 from tqdm import tqdm
 from config import DATA_DIR
@@ -377,7 +379,8 @@ def prepare_cox_model_data(
             f"{data_type!r} data is missing required columns: {sorted(missing_columns)}."
         )
 
-    baseline_stats = get_baseline_stats(data, cycle_data, DATA_TYPE, aggregation)
+    # Get baseline statistics for the specified data type and aggregation.
+    baseline_stats = get_baseline_stats(data, cycle_data, DATA_TYPE, aggregation, value_column = value_column)
 
     metric_timestamp = get_timestamp_column(metric)
     date_source = metric[metric_timestamp]
@@ -616,8 +619,9 @@ def cox_model(
         recent_value_window: int = 3,
         recent_value_min_periods: int = 1,
         recent_value_aggregation: str = "mean"):
+        #pylint: disable=too-many-locals,too-many-statements
     """Placeholder for future implementation of a Cox proportional hazards model."""
-    #pylint: disable=too-many-locals,too-many-statements
+
     df = prepare_cox_model_data(
         data,
         data_type,
@@ -633,7 +637,6 @@ def cox_model(
         recent_value_aggregation = recent_value_aggregation
         )
 
-    
     model = CoxTimeVaryingFitter()
     df = df.dropna(subset=["value_recent"]).reset_index(drop=True)
     model.fit(
@@ -645,8 +648,8 @@ def cox_model(
         formula="value_recent",
     )
 
-    model.print_summary()
-    return df
+    
+    return model
 
 if __name__ == "__main__":
 
@@ -660,11 +663,133 @@ if __name__ == "__main__":
                                         "smoothed_cadence_by_zone5",
                                         "cycles"])
 
-    DATA_TYPE = "rhr"
+    DATA_TYPE = "smoothed_cadence_by_zone2"
     cycle_data = data["cycles"]
-    cox_input = cox_model(data,
-                          ratios = True,
-                          per_value = 0.05,
-                          data_type=DATA_TYPE,
-                          event_column= "hospitalization",
-                          cycle_data=data["cycles"])
+
+    datatypes = ["smoothed_cadence_by_zone1", "smoothed_cadence_by_zone2", "smoothed_cadence_by_zone3", "smoothed_cadence_by_zone4", "smoothed_cadence_by_zone5", "cycles"]
+    data_filt = {dt: data[dt] for dt in datatypes if dt in data}
+    pat_ids =  data_filt["cycles"]["participant_id"].unique()
+
+    data_filt = add_side_effect_column(pat_ids, data_filt)
+
+    for datatype in datatypes:
+        if datatypes != "cycles":
+            data[datatype] = data_filt[datatype]
+
+    RESULTS_DIR = Path("figures/cox_results")
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    results = []
+    settings = {
+        "rhr": {
+            "ratios": True,
+            "per_value": 0.05,
+            "value_column": "value"
+        },
+        "steps": {
+            "ratios": False,
+            "per_value": 1000,
+            "value_column": "value"
+        },
+        "hrv": {
+            "ratios": True,
+            "per_value": 0.05,
+            "value_column": "rmssd"
+        },
+        "smoothed_cadence_by_zone1": {
+            "ratios": False,
+            "per_value": 5,
+            "value_column": "cadence"
+        },
+        "smoothed_cadence_by_zone2": {
+            "ratios": False,
+            "per_value": 5,
+            "value_column": "cadence"
+        },
+        "smoothed_cadence_by_zone3": {
+            "ratios": False,
+            "per_value": 5,
+            "value_column": "cadence"
+        },
+        "smoothed_cadence_by_zone4": {
+            "ratios": False,
+            "per_value": 5,
+            "value_column": "cadence"
+        },
+        "smoothed_cadence_by_zone5": {
+            "ratios": False,
+            "per_value": 5,
+            "value_column": "cadence"
+        }
+    }
+
+
+    for DATA_TYPE, params in settings.items():
+        for event in ["hospitalization", "ed_visit", "cycle_dose_changed"]:
+            try:
+                if DATA_TYPE == "hrv":
+                    if event == "ed_visit":
+                        print("help!")   
+                model = cox_model(
+                    data,
+                    ratios=params["ratios"],
+                    per_value=params["per_value"],
+                    data_type=DATA_TYPE,
+                    value_column=params["value_column"],
+                    event_column=event,
+                    cycle_data=data["cycles"],
+                )
+                     
+                results.append({
+                    "data_type": DATA_TYPE,
+                    "event": event,
+                    "status": "fitted",
+                    "hr": float(model.summary.loc["value_recent", "exp(coef)"]),
+                    "hr_lower_95": float(model.summary.loc["value_recent", "exp(coef) lower 95%"]),
+                    "hr_upper_95": float(model.summary.loc["value_recent", "exp(coef) upper 95%"]),
+                    "p_value": float(model.summary.loc["value_recent", "p"]),
+                    "n_events": int(model.event_observed.sum()),
+                    "n_periods": int(model._n_examples),
+                    "per_value": params["per_value"],
+                    "ratios": params["ratios"],
+                })
+
+            except (LinAlgError, ConvergenceError, ValueError) as exc:
+                logging.warning(
+                    "Could not fit Cox model for %s / %s: %s",
+                    DATA_TYPE,
+                    event,
+                    exc,
+                )
+
+                results.append({
+                    "data_type": DATA_TYPE,
+                    "event": event,
+                    "status": "not_fitted",
+                    "error": str(exc),
+                    "per_value": params["per_value"],
+                    "ratios": params["ratios"],
+                })
+    results_df = pd.DataFrame(results)
+    results_path = RESULTS_DIR / "cox_model_results.csv"
+    results_df.to_csv(results_path, index=False)
+
+    logging.info("Saved %d Cox model results to %s", len(results_df), results_path)
+
+    DATA_TYPE = "rhr"
+    model = cox_model(
+                        data,
+                        ratios=True,
+                        per_value=0.05,
+                        data_type=DATA_TYPE,
+                        value_column="value",
+                        event_column="hospitalization",
+                        cycle_data=data["cycles"],
+                        aggregation="median",
+                        max_interpolation_gap_days=7,
+                        recent_value_window=3,
+                        recent_value_min_periods=1,
+                        recent_value_aggregation="median"
+                    )
+
+    model.print_summary()
