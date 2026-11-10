@@ -648,7 +648,6 @@ def cox_model(
         formula="value_recent",
     )
 
-    
     return model
 
 if __name__ == "__main__":
@@ -666,7 +665,13 @@ if __name__ == "__main__":
     DATA_TYPE = "smoothed_cadence_by_zone2"
     cycle_data = data["cycles"]
 
-    datatypes = ["smoothed_cadence_by_zone1", "smoothed_cadence_by_zone2", "smoothed_cadence_by_zone3", "smoothed_cadence_by_zone4", "smoothed_cadence_by_zone5", "cycles"]
+    datatypes = ["smoothed_cadence_by_zone1",
+                 "smoothed_cadence_by_zone2",
+                 "smoothed_cadence_by_zone3",
+                 "smoothed_cadence_by_zone4",
+                 "smoothed_cadence_by_zone5",
+                 "cycles"]
+
     data_filt = {dt: data[dt] for dt in datatypes if dt in data}
     pat_ids =  data_filt["cycles"]["participant_id"].unique()
 
@@ -723,13 +728,12 @@ if __name__ == "__main__":
         }
     }
 
-
     for DATA_TYPE, params in settings.items():
         for event in ["hospitalization", "ed_visit", "cycle_dose_changed"]:
             try:
                 if DATA_TYPE == "hrv":
                     if event == "ed_visit":
-                        print("help!")   
+                        print("help!")
                 model = cox_model(
                     data,
                     ratios=params["ratios"],
@@ -738,8 +742,9 @@ if __name__ == "__main__":
                     value_column=params["value_column"],
                     event_column=event,
                     cycle_data=data["cycles"],
+                    max_interpolation_gap_days=3
                 )
-                     
+
                 results.append({
                     "data_type": DATA_TYPE,
                     "event": event,
@@ -775,21 +780,3 @@ if __name__ == "__main__":
     results_df.to_csv(results_path, index=False)
 
     logging.info("Saved %d Cox model results to %s", len(results_df), results_path)
-
-    DATA_TYPE = "rhr"
-    model = cox_model(
-                        data,
-                        ratios=True,
-                        per_value=0.05,
-                        data_type=DATA_TYPE,
-                        value_column="value",
-                        event_column="hospitalization",
-                        cycle_data=data["cycles"],
-                        aggregation="median",
-                        max_interpolation_gap_days=7,
-                        recent_value_window=3,
-                        recent_value_min_periods=1,
-                        recent_value_aggregation="median"
-                    )
-
-    model.print_summary()
