@@ -75,6 +75,7 @@ class ParticipantDataLoader:
                     .pipe(pd.to_numeric, errors="coerce")
                     .astype(object)
                     .fillna(False)
+                    .infer_objects(copy=False)
                 )
 
             for col in bool_cols:

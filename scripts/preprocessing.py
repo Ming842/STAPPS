@@ -96,10 +96,11 @@ class Preprocessor:
             .sum()
             .sort_index()
         )
-        valid_series = participant_data.groupby("date").apply(
-            lambda x: (
-                len(x[x["dateTime"].dt.hour >= 7]) / len(x)
-            ) >= 0.6
+        valid_series = participant_data.groupby(
+            "date"
+        ).apply(
+            lambda x: (x["dateTime"].dt.hour >= 7).mean() >= 0.6,
+            include_groups=False,
         )
 
         daily_ma = {
@@ -135,10 +136,18 @@ class Preprocessor:
         valid_dates = valid_series[valid_series].index
         step_data.loc[~step_data["date"].isin(valid_dates), "date"] = pd.NaT
 
-        cadence = participant_data.groupby("date", group_keys=False).apply(
+        cadence = participant_data.groupby(
+            "date",
+            group_keys=False
+        ).apply(
             lambda group: group["value"].div(
-                group["dateTime"].diff().dt.total_seconds().div(60).replace(0, pd.NA)
-            ).fillna(0)
+                group["dateTime"]
+                .diff()
+                .dt.total_seconds()
+                .div(60)
+                .replace(0, pd.NA)
+            ).fillna(0),
+            include_groups=False,
         )
         step_data["cadence"] = cadence.reindex(step_data.index).fillna(0)
         return [step_data]
@@ -252,6 +261,61 @@ class Preprocessor:
             frames.append(self._attach_participant_id(frame, participant_id))
         return frames
 
+    def _parse_sleep_data(self, loaded_data: list, participant_id: int) -> list[pd.DataFrame]:
+        """Parse sleep data records.
+
+        Args:
+            loaded_data (list): List of raw sleep data records.
+            participant_id (int): Participant identifier associated with the data.
+
+        Returns:
+            list[pd.DataFrame]: Processed sleep-score DataFrames related to the participant.
+        """
+        if participant_id == 10:
+            logging.warning("Participant 10")
+        frames: list[pd.DataFrame] = []
+        for records in loaded_data:
+            records_df = pd.DataFrame(records)
+            records_df["dateTime"] = pd.to_datetime(
+                records_df["dateOfSleep"],
+                format="%Y-%m-%d",
+                errors="coerce",
+            ).dt.normalize()
+
+            records_df["weighted"] = (
+                records_df["efficiency"] * records_df["duration"]
+            )
+
+            daily = (
+                records_df.groupby("dateTime", as_index=False)
+                .agg(
+                    weighted_sum=("weighted", "sum"),
+                    duration_sum=("duration", "sum"),
+                )
+            )
+            frame = daily.copy()
+            frame["value"] = (
+                daily["weighted_sum"] / daily["duration_sum"]
+            )
+            frame["duration"] = daily["duration_sum"]
+
+            frames.append(self._attach_participant_id(frame, participant_id))
+
+        if not frames:
+            return []
+
+        sleep_score = pd.concat(frames, ignore_index=True)
+        sleep_score.sort_values(by=["participant_id", "dateTime"], inplace=True)
+        sleep_score.reset_index(drop=True, inplace=True)
+
+        for window in range(2, 8):
+            sleep_score[f"sleep_mov_mean_{window}"] = (
+                sleep_score["value"]
+                .rolling(window=window, min_periods=window-1)
+                .mean()
+            )
+        return [sleep_score]
+    
     def _process_data(
             self,
             data_type: str,
@@ -271,6 +335,7 @@ class Preprocessor:
             "Heart Rate Variability Summary": self._parse_hrv_summary,
             "resting_heart_rate": self._parse_resting_heart_rate,
             "^heart_rate": self._parse_heart_rate,
+            "^sleep-.*\\.json$": self._parse_sleep_data,
         }
 
         frames = []
@@ -330,16 +395,6 @@ class Preprocessor:
         """
         return self._process_data("resting_heart_rate", part_id)
 
-    def process_sleep_score(self, part_id: int | list[int] | None = None) -> pd.DataFrame:
-        """Process Sleep Score data as long as it is available.
-
-        Args:
-            part_id (int | list[int] | None): Participant ID or IDs to load.
-
-        Returns:
-            pd.DataFrame: Processed sleep-score data.
-        """
-        return self._process_data("sleep_score", part_id)
 
     def process_step_count(self, part_id: int | list[int] | None = None) -> pd.DataFrame:
         """Process Step Count data as long as it is available.
@@ -351,6 +406,16 @@ class Preprocessor:
             pd.DataFrame: Processed step-count data.
         """
         return self._process_data("steps", part_id)
+
+    def process_sleep_data(self, part_id: int | list[int] | None = None) -> pd.DataFrame:
+        """Process Sleep data as long as it is available.
+
+        Args:
+            part_id (int | list[int] | None): Participant ID or IDs to load.
+        Returns:   
+        pd.DataFrame: Processed sleep data.
+        """
+        return self._process_data(r"^sleep-.*\.json$", part_id)
 
     def get_daily_hr_stats(self, part_ids: int | list[int], data: pd.DataFrame) -> pd.DataFrame:
         """Get daily heart-rate statistics for all participants.
@@ -397,12 +462,16 @@ def load_plot_data(part_ids: list, data_types: list[str] | tuple[str, ...] | str
 
     part_ids = normalize_part_ids(part_ids)
 
-    valid_types = {"rhr", "hrv", "hr", "steps", "cycles"}
+    valid_types = {"rhr", "hrv", "hr", "steps", "cycles", "sleep"}
     if data_types is None:
         logging.info("No data types specified. Defaulting to all available types.")
-        data_types = ("rhr", "hrv", "hr", "steps", "cycles")
+        data_types = valid_types
     elif isinstance(data_types, str):
         data_types = (data_types,)
+    elif isinstance(data_types, (list, tuple)):
+        data_types = set(data_types)
+    else:
+        raise TypeError("data_types must be a string, list, or tuple.")
 
     invalid = set(data_types) - valid_types
     if invalid:
@@ -418,6 +487,8 @@ def load_plot_data(part_ids: list, data_types: list[str] | tuple[str, ...] | str
         payload["hr"] = preprocessor.process_heart_rate(part_id=part_ids)
     if "steps" in data_types:
         payload["steps"] = preprocessor.process_step_count(part_id=part_ids)
+    if "sleep" in data_types:
+        payload["sleep"] = preprocessor.process_sleep_data(part_id=part_ids)
     if "cycles" in data_types:
         payload["cycles"] = participant_loader.cycle_data(part_id=part_ids)
 
@@ -449,8 +520,9 @@ def merge_cadence_with_hr(cadence_data: pd.DataFrame, hr_data: pd.DataFrame) -> 
     if "dateTime" not in cadence_data.columns or "dateTime" not in hr_data.columns:
         raise ValueError("Both DataFrames must contain a 'dateTime' column.")
 
-    cadence_data["dateTime"] = pd.to_datetime(cadence_data["dateTime"], errors="coerce")
-    hr_data["dateTime"] = pd.to_datetime(hr_data["dateTime"], errors="coerce")
+
+    cadence_data["dateTime"] = pd.to_datetime(cadence_data["dateTime"], errors="coerce").copy()
+    hr_data["dateTime"] = pd.to_datetime(hr_data["dateTime"], errors="coerce").copy()
 
     cadence_data = cadence_data.dropna(subset=["dateTime"])
     hr_data = hr_data.dropna(subset=["dateTime"])
@@ -1078,7 +1150,7 @@ def get_baseline_stats(
 
 
 if __name__ == "__main__":
-    pat_ids, data = load_plot_data([1,2,4,5,6,7,8,10,11,12,14], data_types=("steps", "hrv", "cycles"))
+    pat_ids, data = load_plot_data([1,2,4,5,6,7,8,10,11,12,14], data_types=("sleep"))
     data = add_side_effect_column([1,2,4,5,6,7,8,10,11,12,14], data)
 
-    print(data["steps"].head())
+    print(data["sleep"].head())

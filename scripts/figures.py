@@ -18,8 +18,9 @@ from plot_defs import (
     set_legend,
     plot_hrv_over_time,
 )
+from parsers import normalize_part_ids
 from preprocessing import load_plot_data, merge_cadence_with_hr
-from scripts.config import FIGURE_FOLDER
+from config import FIGURE_FOLDER
 from statistics_def import get_hr_zones
 
 
@@ -150,7 +151,30 @@ def zone_ratios_hr(ax: plt.Axes, data: dict[str, pd.DataFrame]) -> None:
     plot_steps_moving_average(ax2, steps_data, style={"linewidth": 2, "linestyle": "--"})
     set_legend(ax, ax2)
 
+def plot_sleep_score(ax: plt.Axes, data: dict[str, pd.DataFrame]) -> None:
+    """Plot sleep score over time.
 
+    Args:
+        ax (plt.Axes): Axis to draw the plot on.
+        data (dict[str, pd.DataFrame]): Data dictionary containing sleep score and cycles.
+
+    Returns:
+        None: Adds the sleep score figure to the provided axis.
+    """
+    sleep_score_data = data["sleep"]
+    steps_data = data["steps"]
+    cycles = data["cycles"]
+
+    plot_info(ax, cycles, sleep_score_data)
+    ax.plot(sleep_score_data["dateTime"], sleep_score_data["value"], label="Sleep Score", color="purple", linewidth=1, alpha = 0.3, linestyle="--")
+    ax.plot(sleep_score_data["dateTime"], sleep_score_data["sleep_mov_mean_5"], label="5-Day Moving Average", color="purple", linewidth=2,alpha = 0.8)
+    ax.set_ylabel("Sleep score")
+    ax.set_xlabel("Time (YYYY-MM-DD)")
+    ax.legend()
+    
+    ax2 = ax.twinx()
+    plot_steps_moving_average(ax2, steps_data, style={"linewidth": 2, "linestyle": "--"})
+    set_legend(ax, ax2)
 def steps_zone_ratios(ax: plt.Axes, data: dict[str, pd.DataFrame]) -> None:
     """Plot total daily steps split by heart-rate zone.
 
@@ -177,48 +201,55 @@ def steps_zone_ratios(ax: plt.Axes, data: dict[str, pd.DataFrame]) -> None:
 
 
 FIGURE_CONFIG = [
+    # {
+    #     "key": "hrv_and_steps",
+    #     "plotter": hrv_and_steps,
+    #     "title": "HRV and Steps Over Time",
+    #     "ylabel": "HRV (ms)",
+    #     "filename": "hrv_and_steps",
+    # },
+    # {
+    #     "key": "rhr_and_steps",
+    #     "plotter": rhr_and_steps,
+    #     "title": "Resting Heart Rate and Steps Over Time",
+    #     "ylabel": "Resting Heart Rate (bpm)",
+    #     "filename": "rhr_and_steps",
+    # },
+    # {
+    #     "key": "hr_and_zones",
+    #     "plotter": hr_and_zones,
+    #     "title": "Heart Rate and Zones Over Time",
+    #     "ylabel": "Heart Rate (bpm)",
+    #     "filename": "hr_and_zones",
+    # },
+    # {
+    #     "key": "cadence_and_steps",
+    #     "plotter": cadence_and_steps,
+    #     "title": "Cadence and Steps Over Time",
+    #     "ylabel": "Cadence (steps/min)",
+    #     "filename": "cadence_and_steps",
+    # },
+    # {
+    #     "key": "steps_zone_ratios",
+    #     "plotter": steps_zone_ratios,
+    #     "title": "Steps and Zone Ratios Over Time",
+    #     "ylabel": "Steps",
+    #     "filename": "steps_zone_ratios",
+    # },
+    # {
+    #     "key": "hr_zone_ratios",
+    #     "plotter": zone_ratios_hr,
+    #     "title": "Heart Rate Zone Ratios Over Time",
+    #     "ylabel": "Heart Rate Zone Ratios",
+    #     "filename": "hr_zone_ratios",
+    # },
     {
-        "key": "hrv_and_steps",
-        "plotter": hrv_and_steps,
-        "title": "HRV and Steps Over Time",
-        "ylabel": "HRV (ms)",
-        "filename": "hrv_and_steps",
-    },
-    {
-        "key": "rhr_and_steps",
-        "plotter": rhr_and_steps,
-        "title": "Resting Heart Rate and Steps Over Time",
-        "ylabel": "Resting Heart Rate (bpm)",
-        "filename": "rhr_and_steps",
-    },
-    {
-        "key": "hr_and_zones",
-        "plotter": hr_and_zones,
-        "title": "Heart Rate and Zones Over Time",
-        "ylabel": "Heart Rate (bpm)",
-        "filename": "hr_and_zones",
-    },
-    {
-        "key": "cadence_and_steps",
-        "plotter": cadence_and_steps,
-        "title": "Cadence and Steps Over Time",
-        "ylabel": "Cadence (steps/min)",
-        "filename": "cadence_and_steps",
-    },
-    {
-        "key": "steps_zone_ratios",
-        "plotter": steps_zone_ratios,
-        "title": "Steps and Zone Ratios Over Time",
-        "ylabel": "Steps",
-        "filename": "steps_zone_ratios",
-    },
-    {
-        "key": "hr_zone_ratios",
-        "plotter": zone_ratios_hr,
-        "title": "Heart Rate Zone Ratios Over Time",
-        "ylabel": "Heart Rate Zone Ratios",
-        "filename": "hr_zone_ratios",
-    },
+        "key": "sleep_score",
+        "plotter": plot_sleep_score,
+        "title": "Sleep Score Over Time",
+        "ylabel": "Sleep Score (efficiency)",
+        "filename": "sleep_score_steps",
+    }
 ]
 
 
@@ -253,7 +284,7 @@ def main(pat_id: int | list[int] | tuple[int, ...]) -> tuple[int, dict[str, plt.
         tuple[int, dict[str, plt.Figure]]: Participant identifier and generated figures.
     """
     requested_id = pat_id[0] if isinstance(pat_id, (list, tuple)) else pat_id
-    loaded_ids, data = load_plot_data([requested_id], data_types=["steps", "cycles", "hr", "hrv", "rhr"])
+    loaded_ids, data = load_plot_data([requested_id], data_types=["steps", "sleep", "cycles"])
     participant_id = loaded_ids[0] if isinstance(loaded_ids, (list, tuple)) else loaded_ids
 
     figures = {}
@@ -296,6 +327,8 @@ def close_figures(figures: dict[str, plt.Figure]) -> None:
 
 if __name__ == "__main__":
     part_ids = range(1, 31)
+    part_ids = normalize_part_ids(part_ids) 
+    print(f"Generating figures for participants: {part_ids}")
     base_path = FIGURE_FOLDER 
     for pt_id in tqdm(part_ids, desc="Plotting participants", unit="participant"):
         try:

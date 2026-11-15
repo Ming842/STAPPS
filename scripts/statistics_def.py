@@ -1,3 +1,6 @@
+
+import warnings
+
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
@@ -287,7 +290,7 @@ def mixed_effects_model(
         groups=analysis["participant_id"],
     )
 
-    return model.fit()
+    return model.fit(), analysis
 
 def prepare_cox_model_data(
     data: dict[str, pd.DataFrame],
@@ -506,7 +509,7 @@ def prepare_cox_model_data(
 
     #make start and stop column for cox model
     daily = daily.sort_values(["participant_id", "date"]).copy()
-
+    daily["date"] = pd.to_datetime(daily["date"])
     daily["interval_start_date"] = daily["date"]
     daily["interval_stop_date"] = (
         daily["date"] + pd.Timedelta(days=1)
@@ -518,12 +521,25 @@ def prepare_cox_model_data(
         .transform("min")
     )
 
+    daily["chemo_cycle_number"] = (
+        daily["date"]
+        .where(daily["chemo_cycle"].eq(True))
+        .groupby(daily["participant_id"])
+        .transform("rank", method="dense")
+        .ffill()
+        .fillna(0)
+    )
+
+    
     daily["start"] = (
         daily["date"] - daily["chemo_start"]
     ).dt.days
 
     daily["stop"] = daily["start"] + 1
     daily = daily[daily["start"] >= 0].copy()
+
+    
+
 
     if ratios:
         has_baseline = baseline_stats["participant_id"].unique()
@@ -580,6 +596,7 @@ def prepare_cox_model_data(
                 "start",
                 "stop",
                 "value_recent",
+                "chemo_cycle_number",
                 event_column,
             ]
         ]
@@ -651,10 +668,10 @@ def cox_model(
     return model
 
 if __name__ == "__main__":
-
     data = load_from_pickle(data_keys=["rhr",
                                         "steps",
                                         "hrv",
+                                        "sleep",
                                         "smoothed_cadence_by_zone1",
                                         "smoothed_cadence_by_zone2",
                                         "smoothed_cadence_by_zone3",
@@ -662,27 +679,27 @@ if __name__ == "__main__":
                                         "smoothed_cadence_by_zone5",
                                         "cycles"])
 
-    DATA_TYPE = "smoothed_cadence_by_zone2"
-    cycle_data = data["cycles"]
+    # DATA_TYPE = "smoothed_cadence_by_zone2"
+    # cycle_data = data["cycles"]
 
-    datatypes = ["smoothed_cadence_by_zone1",
-                 "smoothed_cadence_by_zone2",
-                 "smoothed_cadence_by_zone3",
-                 "smoothed_cadence_by_zone4",
-                 "smoothed_cadence_by_zone5",
-                 "cycles"]
+    # # datatypes = ["smoothed_cadence_by_zone1",
+    # #              "smoothed_cadence_by_zone2",
+    # #              "smoothed_cadence_by_zone3",
+    # #              "smoothed_cadence_by_zone4",
+    # #              "smoothed_cadence_by_zone5",
+    # #              "cycles"]
 
-    data_filt = {dt: data[dt] for dt in datatypes if dt in data}
-    pat_ids =  data_filt["cycles"]["participant_id"].unique()
+    # # data_filt = {dt: data[dt] for dt in datatypes if dt in data}
+    # # pat_ids =  data_filt["cycles"]["participant_id"].unique()
 
-    data_filt = add_side_effect_column(pat_ids, data_filt)
+    # # data_filt = add_side_effect_column(pat_ids, data_filt)
 
-    for datatype in datatypes:
-        if datatypes != "cycles":
-            data[datatype] = data_filt[datatype]
+    # # for datatype in datatypes:
+    # #     if datatypes != "cycles":
+    # #         data[datatype] = data_filt[datatype]
 
-    RESULTS_DIR = Path("figures/cox_results")
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    # RESULTS_DIR = Path("figures/cox_results")
+    # RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     results = []
     settings = {
@@ -694,6 +711,11 @@ if __name__ == "__main__":
         "steps": {
             "ratios": False,
             "per_value": 1000,
+            "value_column": "value"
+        },
+        "sleep": {
+            "ratios": False,
+            "per_value": 5,
             "value_column": "value"
         },
         "hrv": {
@@ -731,9 +753,6 @@ if __name__ == "__main__":
     for DATA_TYPE, params in settings.items():
         for event in ["hospitalization", "ed_visit", "cycle_dose_changed"]:
             try:
-                if DATA_TYPE == "hrv":
-                    if event == "ed_visit":
-                        print("help!")
                 model = cox_model(
                     data,
                     ratios=params["ratios"],
@@ -745,19 +764,21 @@ if __name__ == "__main__":
                     max_interpolation_gap_days=3
                 )
 
-                results.append({
-                    "data_type": DATA_TYPE,
-                    "event": event,
-                    "status": "fitted",
-                    "hr": float(model.summary.loc["value_recent", "exp(coef)"]),
-                    "hr_lower_95": float(model.summary.loc["value_recent", "exp(coef) lower 95%"]),
-                    "hr_upper_95": float(model.summary.loc["value_recent", "exp(coef) upper 95%"]),
-                    "p_value": float(model.summary.loc["value_recent", "p"]),
-                    "n_events": int(model.event_observed.sum()),
-                    "n_periods": int(model._n_examples),
-                    "per_value": params["per_value"],
-                    "ratios": params["ratios"],
-                })
+                for covariate in model.summary.index:
+                    results.append({
+                        "data_type": DATA_TYPE,
+                        "event": event,
+                        "covariate": covariate,
+                        "status": "fitted",
+                        "hr": float(model.summary.loc[covariate, "exp(coef)"]),
+                        "hr_lower_95": float(model.summary.loc[covariate, "exp(coef) lower 95%"]),
+                        "hr_upper_95": float(model.summary.loc[covariate, "exp(coef) upper 95%"]),
+                        "p_value": float(model.summary.loc[covariate, "p"]),
+                        "n_events": int(model.event_observed.sum()),
+                        "n_periods": int(model._n_examples),
+                        "per_value": params["per_value"] if covariate == "value_recent" else None,
+                        "ratios": params["ratios"] if covariate == "value_recent" else None,
+                    })
 
             except (LinAlgError, ConvergenceError, ValueError) as exc:
                 logging.warning(
@@ -773,10 +794,151 @@ if __name__ == "__main__":
                     "status": "not_fitted",
                     "error": str(exc),
                     "per_value": params["per_value"],
-                    "ratios": params["ratios"],
+                    "ratios": params["ratios"]
                 })
     results_df = pd.DataFrame(results)
-    results_path = RESULTS_DIR / "cox_model_results.csv"
+    results_path = RESULTS_DIR / "cox_model_results_2.csv"
     results_df.to_csv(results_path, index=False)
 
     logging.info("Saved %d Cox model results to %s", len(results_df), results_path)
+
+    # cycles = data["cycles"]
+
+    # data = get_before_and_after_chemo(data, no_ae_only=False)  
+    # settings = {
+    #     "rhr": {
+    #         "ratios": True,
+    #         "value_column": "value",
+    #         "aggregation": "mean"
+    #     },
+    #     "steps": {
+    #         "ratios": False,
+    #         "value_column": "value",
+    #         "aggregation": "sum"
+    #     },
+    #     "sleep": {
+    #         "ratios": False,
+    #         "value_column": "value",
+    #         "aggregation": "mean"
+    #     },
+    #     "hrv": {
+    #         "ratios": True,
+    #         "value_column": "rmssd",
+    #         "aggregation": "mean"
+    #     },
+    #     "smoothed_cadence_by_zone1": {
+    #         "ratios": True,
+    #         "value_column": "cadence",
+    #         "aggregation": "mean"
+    #     },
+    #     "smoothed_cadence_by_zone2": {
+    #         "ratios": True,
+    #         "value_column": "cadence",
+    #         "aggregation": "mean"
+    #     },
+    #     "smoothed_cadence_by_zone3": {
+    #         "ratios": True,
+    #         "value_column": "cadence",
+    #         "aggregation": "mean"
+    #     },
+    #     "smoothed_cadence_by_zone4": {
+    #         "ratios": True,
+    #         "value_column": "cadence",
+    #         "aggregation": "mean"
+    #     },
+    #     "smoothed_cadence_by_zone5": {
+    #         "ratios": True,
+    #         "value_column": "cadence",
+    #         "aggregation": "mean"
+    #     }
+    # }
+    # RESULTS_DIR = Path("figures/cox_results")
+    # RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # results = []
+
+    # for DATA_TYPE, params in settings.items():
+    #     print(f"Processing {DATA_TYPE}...")
+
+    #     result, analysis = mixed_effects_model(
+    #         data,
+    #         data_type=DATA_TYPE,
+    #         value_column=params["value_column"],
+    #         aggregation=params["aggregation"],
+    #         ratios=params["ratios"],
+    #     )
+    #     print(result.summary())
+    #     for period in [
+    #         "administration_day",
+    #         "post_1_3",
+    #         "post_4_7",
+    #     ]:
+
+    #         term = (
+    #             'C(period, Treatment(reference="baseline"))'
+    #             f'[T.{period}]'
+    #         )
+
+    #         if term not in result.params.index:
+    #             continue
+
+    #         ci = result.conf_int().loc[term]
+
+    #         results.append({
+    #             "Metric": DATA_TYPE,
+
+    #             "Effect scale": (
+    #                 "Percentage change (%)"
+    #                 if params["ratios"]
+    #                 else (
+    #                     "Steps/day"
+    #                     if DATA_TYPE == "steps"
+    #                     else "Days"
+    #                 )
+    #             ),
+
+    #             "Participants":
+    #                 analysis["participant_id"].nunique(),
+
+    #             "Total Days":
+    #                 len(analysis),
+
+    #             "Period": (
+    #                 period
+    #                 .replace("administration_day", "Administration day")
+    #                 .replace("post_1_3", "Days 1-3")
+    #                 .replace("post_4_7", "Days 4-7")
+    #             ),
+
+    #             "Estimate":
+    #                 round(float(result.params[term]), 2),
+
+    #             "95% CI":
+    #                 (
+    #                     f"{ci[0]:.2f} to "
+    #                     f"{ci[1]:.2f}"
+    #                 ),
+
+    #             "p-value":
+    #                 round(float(result.pvalues[term]), 3),
+
+    #             "Model status":
+    #                 (
+    #                     "Converged"
+    #                     if result.converged
+    #                     else "Not converged"
+    #                 ),
+    #         })
+
+    # results_df = pd.DataFrame(results)
+
+    # results_df.to_csv(
+    #     RESULTS_DIR / "mixed_effects_results.csv",
+    #     index=False,
+    # )
+
+    # logging.info(
+    #     "Saved %d mixed-effects results to %s",
+    #     len(results_df),
+    #     RESULTS_DIR / "mixed_effects_results.csv",
+    # )
